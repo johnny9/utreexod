@@ -95,8 +95,35 @@ chmod 600 "$HOME/.utreexod-compact/utreexod.conf"
 
 The mempool, compact validation, and AssumeUtreexo bootstrap are enabled by
 default. Omit `noutreexo`, `noassumeutreexo`, and proof-index options for this
-mainnet deployment. The explicit proof endpoint must also appear in `connect`
-or `addpeer` and must use a numeric IPv4 address.
+mainnet deployment.
+
+Proof providers are selected automatically from connected peers' advertised
+services. Multiple providers share requests; blocks and headers can come from
+ordinary Core peers. Add a standard v0.6 proof provider with another `connect`
+or `addpeer` entry. It does not need `utreexoproofpeer`.
+
+`utreexoproofpeer` only marks sidecar endpoints whose block archives use native
+tree-height target positions instead of v0.6's fixed 63-row positions. Repeat it
+for each such sidecar. Each marked endpoint must also appear in `connect` or
+`addpeer` and use a numeric IPv4 address. This option does not restrict which
+other peers may provide proofs.
+
+The scheduler observes these advertised capabilities:
+
+| Services | Proof range | Supplies blocks |
+| --- | --- | --- |
+| `NODE_UTREEXO` | New blocks | No promise |
+| `NODE_UTREEXO \| NODE_NETWORK` | All historical blocks | Yes |
+| `NODE_UTREEXO \| NODE_NETWORK_LIMITED` | Latest 288 blocks | Latest 288 |
+| `NODE_UTREEXO_ARCHIVE` | All historical blocks | No promise |
+
+A proof-only connection does not need `NODE_NETWORK` or `NODE_WITNESS`.
+Historical catch-up requires a provider covering the requested heights;
+`NODE_UTREEXO` alone is insufficient for a backlog. At most 32 block/proof pairs
+are pending. A disconnect, invalid proof, or 15-second proof timeout retries
+unfinished work with another eligible provider while retaining downloaded
+blocks. If no eligible provider remains, validation waits for one to connect.
+Unavailable proofs do not blame a block source that delivered its window.
 
 The example binds pool RPC to loopback and disables TLS there. For a pool on
 another machine, use a private tunnel or configure TLS.
@@ -143,8 +170,16 @@ rejection, full/partial/zero-additional-hash requests, reconnect and restart
 recovery, template contents, rejection of an incomplete submission, standard
 `submitblock`, block relay in both directions, and matching accumulator roots.
 The integration harness and reproduction command are in the sidecar's
-[relay guide](https://github.com/johnny9/utreexo-core-rpc/blob/v0.5.0-beta.1/doc/core-backed-transaction-proof-relay.md).
+[relay guide](https://github.com/johnny9/utreexo-core-rpc/blob/master/doc/core-backed-transaction-proof-relay.md).
+
+The additional `core_utreexod_proof_peers.py` integration combines the actual
+sidecar with a standard v0.6 utreexod proof generator. It exercises archive-only
+and `NODE_UTREEXO`-only connections, timeout/invalid-proof/disconnect failover,
+separate Core block downloads, transaction proofs, template submission, and
+matching roots. These consumer changes follow sidecar v0.5.0-beta.1; use this
+branch or the updated patch on sidecar master, rather than the beta.1 patch.
 
 Full mainnet catch-up, sustained mainnet load, and a combined reorg integration
 remain unvalidated. Production genesis synchronization, TTL proof serving, and
 compact-wallet `sendrawtransaction` proof acquisition are outside this setup.
+The upstream committed-TTL synchronization path is unchanged.

@@ -60,7 +60,7 @@ type MsgUtreexoProof struct {
 // See Deserialize for decoding transactions stored to disk, such as in a
 // database, as opposed to decoding transactions from the wire.
 func (msg *MsgUtreexoProof) BtcDecode(r io.Reader, pver uint32, enc MessageEncoding) error {
-	_, err := r.Read(msg.BlockHash[:])
+	_, err := io.ReadFull(r, msg.BlockHash[:])
 	if err != nil {
 		return err
 	}
@@ -68,6 +68,9 @@ func (msg *MsgUtreexoProof) BtcDecode(r io.Reader, pver uint32, enc MessageEncod
 	proofCount, err := ReadVarInt(r, 0)
 	if err != nil {
 		return err
+	}
+	if proofCount > MaxProofHashes {
+		return messageError("MsgUtreexoProof.BtcDecode", "too many proof hashes")
 	}
 
 	msg.ProofHashes = make([]utreexo.Hash, proofCount)
@@ -82,6 +85,9 @@ func (msg *MsgUtreexoProof) BtcDecode(r io.Reader, pver uint32, enc MessageEncod
 	if err != nil {
 		return err
 	}
+	if targetCount > MaxPossibleInputsPerBlock {
+		return messageError("MsgUtreexoProof.BtcDecode", "too many proof targets")
+	}
 
 	msg.Targets = make([]uint64, targetCount)
 	for i := range msg.Targets {
@@ -94,6 +100,9 @@ func (msg *MsgUtreexoProof) BtcDecode(r io.Reader, pver uint32, enc MessageEncod
 	leafCount, err := ReadVarInt(r, 0)
 	if err != nil {
 		return err
+	}
+	if leafCount > MaxPossibleInputsPerBlock {
+		return messageError("MsgUtreexoProof.BtcDecode", "too many proof leaves")
 	}
 
 	msg.LeafDatas = make([]LeafData, leafCount)

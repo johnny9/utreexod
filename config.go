@@ -99,18 +99,18 @@ func minUint32(a, b uint32) uint32 {
 // See loadConfig for details on the configuration load process.
 type config struct {
 	// General application behavior.
-	ShowVersion         bool   `short:"V" long:"version" description:"Display version information and exit"`
-	DataDir             string `short:"b" long:"datadir" description:"Directory to store data"`
-	LogDir              string `long:"logdir" description:"Directory to log output."`
-	ConfigFile          string `short:"C" long:"configfile" description:"Path to configuration file"`
-	DebugLevel          string `short:"d" long:"debuglevel" description:"Logging level for all subsystems {trace, debug, info, warn, error, critical} -- You may also specify <subsystem>=<level>,<subsystem2>=<level>,... to set the log level for individual subsystems -- Use show to list available subsystems"`
-	DbType              string `long:"dbtype" description:"Database backend to use for the Block Chain"`
-	SigCacheMaxSize     uint   `long:"sigcachemaxsize" description:"The maximum number of entries in the signature verification cache"`
-	UtxoCacheMaxSizeMiB uint   `long:"utxocachemaxsize" description:"The maximum size in MiB of the UTXO cache"`
-	UtreexoProofPeer    string `long:"utreexoproofpeer" description:"Explicit sidecar proof endpoint (also add with --connect); ordinary peers supply blocks and headers"`
-	NoUtreexo           bool   `long:"noutreexo" description:"Disable utreexo compact state during block validation"`
-	NoWinService        bool   `long:"nowinservice" description:"Do not start as a background service on Windows -- NOTE: This flag only works on the command line, not in the config file"`
-	Prune               uint64 `long:"prune" description:"Prune already validated blocks from the database. Must specify a target size in MiB (minimum value of 550, default of 550. Set to 0 to disable pruning.)"`
+	ShowVersion         bool     `short:"V" long:"version" description:"Display version information and exit"`
+	DataDir             string   `short:"b" long:"datadir" description:"Directory to store data"`
+	LogDir              string   `long:"logdir" description:"Directory to log output."`
+	ConfigFile          string   `short:"C" long:"configfile" description:"Path to configuration file"`
+	DebugLevel          string   `short:"d" long:"debuglevel" description:"Logging level for all subsystems {trace, debug, info, warn, error, critical} -- You may also specify <subsystem>=<level>,<subsystem2>=<level>,... to set the log level for individual subsystems -- Use show to list available subsystems"`
+	DbType              string   `long:"dbtype" description:"Database backend to use for the Block Chain"`
+	SigCacheMaxSize     uint     `long:"sigcachemaxsize" description:"The maximum number of entries in the signature verification cache"`
+	UtxoCacheMaxSizeMiB uint     `long:"utxocachemaxsize" description:"The maximum size in MiB of the UTXO cache"`
+	UtreexoProofPeers   []string `long:"utreexoproofpeer" description:"Sidecar endpoint using native block-target positions (repeatable; also add with --connect or --addpeer). Proof providers are selected by advertised services."`
+	NoUtreexo           bool     `long:"noutreexo" description:"Disable utreexo compact state during block validation"`
+	NoWinService        bool     `long:"nowinservice" description:"Do not start as a background service on Windows -- NOTE: This flag only works on the command line, not in the config file"`
+	Prune               uint64   `long:"prune" description:"Prune already validated blocks from the database. Must specify a target size in MiB (minimum value of 550, default of 550. Set to 0 to disable pruning.)"`
 
 	// Profiling options.
 	Profile       string `long:"profile" description:"Enable HTTP profiling on given port -- NOTE port must be between 1024 and 65536"`
@@ -1213,8 +1213,8 @@ func loadConfig() (*config, []string, error) {
 		}
 	}
 
-	if cfg.UtreexoProofPeer != "" {
-		host, port, err := net.SplitHostPort(cfg.UtreexoProofPeer)
+	for _, proofPeer := range cfg.UtreexoProofPeers {
+		host, port, err := net.SplitHostPort(proofPeer)
 		number, portErr := strconv.Atoi(port)
 		if err != nil || net.ParseIP(host).To4() == nil || portErr != nil || number < 1 || number > 65535 {
 			return nil, nil, fmt.Errorf("--utreexoproofpeer requires a numeric IPv4:port endpoint")
@@ -1224,7 +1224,7 @@ func loadConfig() (*config, []string, error) {
 		}
 		connected := false
 		for _, endpoint := range append(append([]string{}, cfg.ConnectPeers...), cfg.AddPeers...) {
-			if endpoint == cfg.UtreexoProofPeer {
+			if endpoint == proofPeer {
 				connected = true
 			}
 		}

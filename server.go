@@ -521,19 +521,12 @@ func (sp *serverPeer) OnVersion(_ *peer.Peer, msg *wire.MsgVersion) *wire.MsgRej
 		return nil
 	}
 
-	// Also reject outbound peers that aren't utreexo nodes if we're a utreexo csn.
-	var wantServices wire.ServiceFlag
-	if sp.server.chain.IsUtreexoViewActive() && cfg.UtreexoProofPeer == "" {
-		wantServices |= wire.SFNodeUtreexo
-	}
-	if !isInbound && !hasServices(msg.Services, wantServices) {
-		missingServices := wantServices & ^msg.Services
-		srvrLog.Debugf("Rejecting peer %s with services %v due to not "+
-			"providing desired services %v", sp.Peer, msg.Services,
-			missingServices)
-		reason := fmt.Sprintf("required services %#x not offered",
-			uint64(missingServices))
-		return wire.NewMsgReject(msg.Command(), wire.RejectNonstandard, reason)
+	// Compact nodes may obtain blocks and proofs over different connections.
+	if !isInbound && sp.server.chain.IsUtreexoViewActive() &&
+		msg.Services&(wire.SFNodeNetwork|wire.SFNodeNetworkLimited|
+			wire.SFNodeUtreexo|wire.SFNodeUtreexoArchive) == 0 {
+		return wire.NewMsgReject(msg.Command(), wire.RejectNonstandard,
+			"peer offers neither blocks nor Utreexo proofs")
 	}
 
 	if !cfg.SimNet && !isInbound {
@@ -548,20 +541,13 @@ func (sp *serverPeer) OnVersion(_ *peer.Peer, msg *wire.MsgVersion) *wire.MsgRej
 			return nil
 		}
 
-		if segwitActive && !sp.IsWitnessEnabled() {
+		if segwitActive && msg.Services&(wire.SFNodeNetwork|wire.SFNodeNetworkLimited) != 0 && !sp.IsWitnessEnabled() {
 			peerLog.Infof("Disconnecting non-segwit peer %v, isn't segwit "+
 				"enabled and we need more segwit enabled peers", sp)
 			sp.Disconnect()
 			return nil
 		}
 
-		// Disconnect peers that aren't utreexo nodes if we're a csn.
-		if sp.server.chain.IsUtreexoViewActive() && !sp.IsUtreexoEnabled() && cfg.UtreexoProofPeer == "" {
-			peerLog.Infof("Disconnecting non-utreexo peer %v, as we're a utreexo "+
-				"node", sp)
-			sp.Disconnect()
-			return nil
-		}
 	}
 
 	// Add the remote peer time as a sample for creating an offset against
@@ -2825,7 +2811,7 @@ func (s *server) peerHandler() {
 	if !cfg.DisableDNSSeed {
 		requiredServices := defaultRequiredServices
 		if !cfg.NoUtreexo {
-			requiredServices |= wire.SFNodeUtreexo
+			requiredServices = wire.SFNodeUtreexo
 		}
 		// Add peers discovered through DNS to the address manager.
 		connmgr.SeedFromDNS(activeNetParams.Params, requiredServices,
@@ -3632,7 +3618,7 @@ func newServer(listenAddrs, agentBlacklist, agentWhitelist []string,
 	s.txMemPool = mempool.New(&txC)
 
 	s.syncManager, err = netsync.New(&netsync.Config{
-		ProofPeer:          cfg.UtreexoProofPeer,
+		SidecarProofPeers:  cfg.UtreexoProofPeers,
 		PeerNotifier:       &s,
 		Chain:              s.chain,
 		TxMemPool:          s.txMemPool,

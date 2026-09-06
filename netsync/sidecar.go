@@ -6,22 +6,8 @@ import (
 	"fmt"
 	"github.com/utreexo/utreexod/blockchain"
 	"github.com/utreexo/utreexod/btcutil"
-	peerpkg "github.com/utreexo/utreexod/peer"
 	"github.com/utreexo/utreexod/wire"
 )
-
-type sidecarFetchMsg struct{}
-
-// All calls are on the sync manager goroutine. The configured proof endpoint
-// supplies no chain-selection information and is never a block sync candidate.
-func (sm *SyncManager) proofPeer() *peerpkg.Peer {
-	for peer := range sm.peerStates {
-		if peer.Addr() == sm.proofPeerAddress && peer.IsUtreexoEnabled() {
-			return peer
-		}
-	}
-	return nil
-}
 
 // Standard submitblock obtains proofs already verified and remembered by the
 // compact mempool. Missing data fails closed; it never asks Core to validate.
@@ -72,7 +58,7 @@ func (sm *SyncManager) attachMempoolProof(block *btcutil.Block) error {
 // Blocks and proofs arrive independently; drain ready pairs in chain order.
 // Do not enqueue onto our own channel while handling a message.
 func (sm *SyncManager) drainSidecarBlocks() {
-	if sm.proofPeerAddress == "" {
+	if !sm.independentProofs() {
 		return
 	}
 	for {
@@ -90,40 +76,4 @@ func (sm *SyncManager) drainSidecarBlocks() {
 			return
 		}
 	}
-}
-
-// A tip change closes the proof connection to disambiguate transaction
-// announcements. Reissue the bounded outstanding block proofs on reconnect;
-// ordinary block/header peers and chain choice remain independent.
-func (sm *SyncManager) recoverSidecarRequests() {
-	peer := sm.proofPeer()
-	if peer == nil {
-		return
-	}
-	state := sm.peerStates[peer]
-	count := 0
-	for blockPeer, blockState := range sm.peerStates {
-		if blockPeer == peer {
-			continue
-		}
-		for hash := range blockState.requestedBlocks {
-			if sm.queuedUtreexoProofs[hash] != nil {
-				continue
-			}
-			if _, pending := state.requestedUtreexoProofs[hash]; pending {
-				continue
-			}
-			msg := &wire.MsgGetUtreexoProof{BlockHash: hash}
-			msg.SetTargetRequestBit()
-			msg.SetProofHashRequestBit()
-			msg.SetLeafDataRequestBit()
-			state.requestedUtreexoProofs[hash] = struct{}{}
-			peer.QueueMessage(msg, nil)
-			count++
-			if count >= 32 {
-				return
-			}
-		}
-	}
-	sm.fetchHeaderBlocks(nil)
 }

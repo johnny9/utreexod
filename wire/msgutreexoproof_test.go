@@ -7,11 +7,38 @@ package wire
 import (
 	"bytes"
 	"testing"
+	"testing/iotest"
 
 	"github.com/stretchr/testify/require"
 	"github.com/utreexo/utreexo"
 	"github.com/utreexo/utreexod/chaincfg/chainhash"
 )
+
+func TestUtreexoProofDecodeLimits(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		prefix []byte
+		count  uint64
+	}{
+		{"hashes", nil, MaxProofHashes + 1},
+		{"targets", []byte{0}, MaxPossibleInputsPerBlock + 1},
+		{"leaves", []byte{0, 0}, MaxPossibleInputsPerBlock + 1},
+		{"overflow", nil, ^uint64(0)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var payload bytes.Buffer
+			payload.Write(make([]byte, 32))
+			payload.Write(tc.prefix)
+			require.NoError(t, WriteVarInt(&payload, 0, tc.count))
+			var message MsgUtreexoProof
+			err := message.BtcDecode(&payload, ProtocolVersion, BaseEncoding)
+			require.IsType(t, &MessageError{}, err)
+		})
+	}
+	var message MsgUtreexoProof
+	reader := iotest.OneByteReader(bytes.NewReader(make([]byte, 35)))
+	require.NoError(t, message.BtcDecode(reader, ProtocolVersion, BaseEncoding))
+}
 
 func TestUtreexoProofSerialize(t *testing.T) {
 	tests := []struct {
