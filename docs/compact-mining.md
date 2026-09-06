@@ -42,6 +42,13 @@ pool at its `getblocktemplate` and standard `submitblock` RPCs. Request the
 `segwit` rule and submit ordinary serialized block hex. Missing transactions,
 parents, or mempool proofs cause submission to fail closed.
 
+For a submission matching the current template's parent and ordered transaction
+witness IDs, `submitblock` reuses the template's assembled input proof. Nonce,
+timestamp, and coinbase changes do not require rebuilding that proof. Each
+submission receives a deep copy, and all normal block and proof validation still
+runs. A changed transaction body, stale tip, or missing cached template uses the
+existing local mempool proof path. Only the current template is retained.
+
 `prune=550` is a block-pruning target in MiB, not a total disk limit. Regtest
 validation covers independent proof sources, failure recovery, transaction relay,
 mining, and matching accumulator roots. Mainnet catch-up, sustained load, and a

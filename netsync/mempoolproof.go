@@ -52,6 +52,7 @@ func (sm *SyncManager) attachMempoolProof(block *btcutil.Block) error {
 		return err
 	}
 	block.SetUtreexoData(proof)
+	log.Debugf("Assembled submission proof from mempool for block %s", block.Hash())
 	return nil
 }
 

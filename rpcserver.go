@@ -372,13 +372,14 @@ func rpcNoTxInfoError(txHash *chainhash.Hash) *btcjson.RPCError {
 // getblocktemplate.
 type gbtWorkState struct {
 	sync.Mutex
-	lastTxUpdate  time.Time
-	lastGenerated time.Time
-	prevHash      *chainhash.Hash
-	minTimestamp  time.Time
-	template      *mining.BlockTemplate
-	notifyMap     map[chainhash.Hash]map[int64]chan struct{}
-	timeSource    blockchain.MedianTimeSource
+	lastTxUpdate     time.Time
+	lastGenerated    time.Time
+	prevHash         *chainhash.Hash
+	minTimestamp     time.Time
+	template         *mining.BlockTemplate
+	templateTxHashes []chainhash.Hash
+	notifyMap        map[chainhash.Hash]map[int64]chan struct{}
+	timeSource       blockchain.MedianTimeSource
 }
 
 // newGbtWorkState returns a new instance of a gbtWorkState with all internal
@@ -1780,7 +1781,7 @@ func (state *gbtWorkState) updateBlockTemplate(s *rpcServer, useCoinbaseValue bo
 
 		// Update work state to ensure another block template isn't
 		// generated until needed.
-		state.template = template
+		state.cacheTemplate(template)
 		state.lastGenerated = time.Now()
 		state.lastTxUpdate = lastTxUpdate
 		state.prevHash = latestHash
@@ -4436,6 +4437,17 @@ func handleSubmitBlock(s *rpcServer, cmd interface{}, closeChan <-chan struct{})
 		return nil, &btcjson.RPCError{
 			Code:    btcjson.ErrRPCDeserialization,
 			Message: "Block decode failed: " + err.Error(),
+		}
+	}
+
+	// Reuse the proof assembled for the current template when the submitted
+	// transaction body matches. Consensus validation below still runs normally.
+	if s.cfg.Chain.IsUtreexoViewActive() {
+		best := s.cfg.Chain.BestSnapshot()
+		if proof := s.gbtWorkState.cachedTemplateProof(block, best.Hash); proof != nil {
+			block.SetHeight(best.Height + 1)
+			block.SetUtreexoData(proof)
+			rpcsLog.Debugf("Reusing cached template proof for block %s", block.Hash())
 		}
 	}
 
