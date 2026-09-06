@@ -595,7 +595,28 @@ mempoolLoop:
 		// mempool since a transaction which depends on other
 		// transactions in the mempool must come after those
 		// dependencies in the final generated block.
-		utxos, err := g.chain.FetchUtxoView(tx)
+		var utxos *blockchain.UtxoViewpoint
+		var err error
+		if g.chain.IsUtreexoViewActive() {
+			// The compact chain has no UTXO database. Use confirmed leaves
+			// already verified by its mempool; leave unconfirmed inputs absent
+			// so the existing dependency ordering places their parents first.
+			var leaves []wire.LeafData
+			leaves, err = g.txSource.FetchLeafDatas(tx.Hash())
+			utxos = blockchain.NewUtxoViewpoint()
+			if err == nil && len(leaves) != len(tx.MsgTx().TxIn) {
+				err = fmt.Errorf("leaf/input count mismatch")
+			}
+			if err == nil {
+				for _, leaf := range leaves {
+					if !leaf.IsUnconfirmed() {
+						utxos.Entries()[leaf.OutPoint] = blockchain.NewUtxoEntry(wire.NewTxOut(leaf.Amount, leaf.PkScript), leaf.Height, leaf.IsCoinBase)
+					}
+				}
+			}
+		} else {
+			utxos, err = g.chain.FetchUtxoView(tx)
+		}
 		if err != nil {
 			log.Warnf("Unable to fetch utxo view for tx %s: %v",
 				tx.Hash(), err)

@@ -29,6 +29,7 @@ type PeerNotifier interface {
 
 // Config is a configuration struct used to initialize a new SyncManager.
 type Config struct {
+	ProofPeer    string
 	PeerNotifier PeerNotifier
 	Chain        *blockchain.BlockChain
 	TxMemPool    *mempool.TxPool

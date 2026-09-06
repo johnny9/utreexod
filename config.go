@@ -107,6 +107,7 @@ type config struct {
 	DbType              string `long:"dbtype" description:"Database backend to use for the Block Chain"`
 	SigCacheMaxSize     uint   `long:"sigcachemaxsize" description:"The maximum number of entries in the signature verification cache"`
 	UtxoCacheMaxSizeMiB uint   `long:"utxocachemaxsize" description:"The maximum size in MiB of the UTXO cache"`
+	UtreexoProofPeer    string `long:"utreexoproofpeer" description:"Explicit sidecar proof endpoint (also add with --connect); ordinary peers supply blocks and headers"`
 	NoUtreexo           bool   `long:"noutreexo" description:"Disable utreexo compact state during block validation"`
 	NoWinService        bool   `long:"nowinservice" description:"Do not start as a background service on Windows -- NOTE: This flag only works on the command line, not in the config file"`
 	Prune               uint64 `long:"prune" description:"Prune already validated blocks from the database. Must specify a target size in MiB (minimum value of 550, default of 550. Set to 0 to disable pruning.)"`
@@ -1209,6 +1210,26 @@ func loadConfig() (*config, []string, error) {
 	if cfg.NoOnion {
 		cfg.oniondial = func(a, b string, t time.Duration) (net.Conn, error) {
 			return nil, errors.New("tor has been disabled")
+		}
+	}
+
+	if cfg.UtreexoProofPeer != "" {
+		host, port, err := net.SplitHostPort(cfg.UtreexoProofPeer)
+		number, portErr := strconv.Atoi(port)
+		if err != nil || net.ParseIP(host).To4() == nil || portErr != nil || number < 1 || number > 65535 {
+			return nil, nil, fmt.Errorf("--utreexoproofpeer requires a numeric IPv4:port endpoint")
+		}
+		if cfg.NoUtreexo {
+			return nil, nil, fmt.Errorf("--utreexoproofpeer requires compact validation without proof indexes")
+		}
+		connected := false
+		for _, endpoint := range append(append([]string{}, cfg.ConnectPeers...), cfg.AddPeers...) {
+			if endpoint == cfg.UtreexoProofPeer {
+				connected = true
+			}
+		}
+		if !connected {
+			return nil, nil, fmt.Errorf("also configure --utreexoproofpeer with --connect or --addpeer")
 		}
 	}
 

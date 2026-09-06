@@ -207,16 +207,19 @@ func limitAdd(m map[chainhash.Hash]struct{}, hash chainhash.Hash, limit int) {
 // chain is in sync, the SyncManager handles incoming block and header
 // notifications and relays announcements of new blocks to peers.
 type SyncManager struct {
-	peerNotifier   PeerNotifier
-	started        int32
-	shutdown       int32
-	chain          *blockchain.BlockChain
-	txMemPool      *mempool.TxPool
-	chainParams    *chaincfg.Params
-	progressLogger *blockProgressLogger
-	msgChan        chan interface{}
-	wg             sync.WaitGroup
-	quit           chan struct{}
+	proofPeerAddress    string
+	proofFetchAfter     time.Time
+	proofFetchScheduled bool
+	peerNotifier        PeerNotifier
+	started             int32
+	shutdown            int32
+	chain               *blockchain.BlockChain
+	txMemPool           *mempool.TxPool
+	chainParams         *chaincfg.Params
+	progressLogger      *blockProgressLogger
+	msgChan             chan interface{}
+	wg                  sync.WaitGroup
+	quit                chan struct{}
 
 	// These fields should only be accessed from the blockHandler thread
 	rejectedTxns     map[chainhash.Hash]struct{}
@@ -273,6 +276,9 @@ func (sm *SyncManager) findNextHeaderCheckpoint(height int32) *chaincfg.Checkpoi
 // simply returns.  It also examines the candidates for any which are no longer
 // candidates and removes them as needed.
 func (sm *SyncManager) startSync() {
+	if sm.proofPeerAddress != "" && sm.proofPeer() == nil {
+		return
+	}
 	// Return now if we're already syncing.
 	if sm.syncPeer != nil {
 		return
@@ -304,7 +310,7 @@ func (sm *SyncManager) startSync() {
 			continue
 		}
 
-		if utreexoViewActive && !peer.IsUtreexoEnabled() {
+		if utreexoViewActive && !peer.IsUtreexoEnabled() && sm.proofPeerAddress == "" {
 			log.Debugf("peer %v not utreexo enabled, skipping", peer)
 			continue
 		}
@@ -424,6 +430,9 @@ func (sm *SyncManager) startSync() {
 // isSyncCandidate returns whether or not the peer is a candidate to consider
 // syncing from.
 func (sm *SyncManager) isSyncCandidate(peer *peerpkg.Peer) bool {
+	if peer.Addr() == sm.proofPeerAddress {
+		return false
+	}
 	// Typically a peer is not a candidate for sync if it's not a full node,
 	// however regression test is special in that the regression tool is
 	// not a full node and still needs to be considered a sync candidate.
@@ -461,7 +470,7 @@ func (sm *SyncManager) isSyncCandidate(peer *peerpkg.Peer) bool {
 	// is a compact state node), then the peer must have utreexo services
 	// active.
 	utreexoViewActive := sm.chain.IsUtreexoViewActive()
-	if utreexoViewActive && !peer.IsUtreexoEnabled() {
+	if utreexoViewActive && !peer.IsUtreexoEnabled() && sm.proofPeerAddress == "" {
 		return false
 	}
 
@@ -523,8 +532,12 @@ func (sm *SyncManager) handleNewPeerMsg(peer *peerpkg.Peer) {
 		requestedUtreexoTTLs:      make(map[wire.MsgGetUtreexoTTLs]struct{}),
 	}
 
+	if peer.Addr() == sm.proofPeerAddress {
+		sm.recoverSidecarRequests()
+	}
+
 	// Start syncing by choosing the best candidate if needed.
-	if isSyncCandidate && sm.syncPeer == nil {
+	if (isSyncCandidate || peer.Addr() == sm.proofPeerAddress) && sm.syncPeer == nil {
 		sm.startSync()
 	}
 }
@@ -820,6 +833,7 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockMsg) {
 		// We have all the data necessary to validate the block now so
 		// it's safee to remove this utreexo proof from the queue.
 		delete(sm.queuedUtreexoProofs, *bmsg.block.Hash())
+		delete(sm.queuedBlocks, *bmsg.block.Hash())
 
 		udata := wire.UData{
 			AccProof: utreexo.Proof{
@@ -829,6 +843,16 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockMsg) {
 			LeafDatas: utreexoProofMsg.proof.LeafDatas,
 		}
 
+		if sm.proofPeerAddress != "" && utreexoProofMsg.peer.Addr() == sm.proofPeerAddress {
+			rows := utreexo.TreeRows(sm.chain.GetUtreexoView().NumLeaves())
+			for i, target := range udata.AccProof.Targets {
+				row := utreexo.DetectRow(target, rows)
+				if row > 0 && row <= rows {
+					start := (^uint64(0) << (rows + 1 - row)) & ((uint64(1) << (rows + 1)) - 1)
+					udata.AccProof.Targets[i] = target - start + (^uint64(0) << (64 - row))
+				}
+			}
+		}
 		bmsg.block.SetUtreexoData(&udata)
 	}
 
@@ -1069,6 +1093,29 @@ func (sm *SyncManager) fetchHeaderBlocks(peer *peerpkg.Peer) {
 		return
 	}
 
+	proofPeer := reqPeer
+	if sm.proofPeerAddress != "" {
+		proofPeer = sm.proofPeer()
+		if proofPeer == nil {
+			return
+		}
+	}
+	proofState := sm.peerStates[proofPeer]
+	if sm.proofPeerAddress != "" {
+		if delay := time.Until(sm.proofFetchAfter); delay > 0 {
+			if !sm.proofFetchScheduled {
+				sm.proofFetchScheduled = true
+				time.AfterFunc(delay, func() {
+					select {
+					case sm.msgChan <- sidecarFetchMsg{}:
+					case <-sm.quit:
+					}
+				})
+			}
+			return
+		}
+		sm.proofFetchAfter = time.Now().Add(250 * time.Millisecond)
+	}
 	_, bestHeaderHeight := sm.chain.BestHeader()
 
 	// Start fetching from the fork point between the best chain and
@@ -1166,7 +1213,7 @@ func (sm *SyncManager) fetchHeaderBlocks(peer *peerpkg.Peer) {
 			// Immediately queue the utreexo proof for this block if we're a
 			// utreexo node.
 			if sm.chain.IsUtreexoViewActive() {
-				peerState.requestedUtreexoProofs[*hash] = struct{}{}
+				proofState.requestedUtreexoProofs[*hash] = struct{}{}
 
 				// If we still have ttls left to download, then we only need
 				// the utreexo proof data since we're in swiftsync ibd.
@@ -1181,11 +1228,11 @@ func (sm *SyncManager) fetchHeaderBlocks(peer *peerpkg.Peer) {
 					msg.SetLeafDataRequestBit()
 				}
 
-				reqPeer.QueueMessage(&msg, nil)
+				proofPeer.QueueMessage(&msg, nil)
 			}
 		}
 
-		if numRequested >= wire.MaxInvPerMsg {
+		if numRequested >= wire.MaxInvPerMsg || (sm.proofPeerAddress != "" && numRequested >= 32) {
 			break
 		}
 	}
@@ -1307,7 +1354,11 @@ func (sm *SyncManager) handleUtreexoProofMsg(hmsg *utreexoProofMsg) {
 		return
 	}
 
+	delete(state.requestedUtreexoProofs, blockHash)
 	sm.queuedUtreexoProofs[blockHash] = hmsg
+	if sm.proofPeerAddress != "" {
+		return
+	}
 
 	bmsg, haveBlock := sm.queuedBlocks[blockHash]
 	if haveBlock {
@@ -1534,7 +1585,7 @@ func (sm *SyncManager) handleInvMsg(imsg *invMsg) {
 
 	// If we're a utreexo compact state node and our peer is not utreexo enabled,
 	// we won't be able to validate blocks from this peer.
-	if sm.chain.IsUtreexoViewActive() && !peer.IsUtreexoEnabled() {
+	if sm.chain.IsUtreexoViewActive() && !peer.IsUtreexoEnabled() && sm.proofPeerAddress == "" {
 		return
 	}
 
@@ -1563,6 +1614,9 @@ func (sm *SyncManager) handleInvMsg(imsg *invMsg) {
 	// we already have and request more blocks to prevent them.
 	for i := 0; i < len(invVects); i++ {
 		iv := invVects[i]
+		if sm.chain.IsUtreexoViewActive() && !peer.IsUtreexoEnabled() && iv.Type != wire.InvTypeBlock && iv.Type != wire.InvTypeWitnessBlock {
+			continue
+		}
 
 		// Ignore unsupported inventory types.
 		switch iv.Type {
@@ -1844,6 +1898,7 @@ out:
 
 			case *blockMsg:
 				sm.handleBlockMsg(msg)
+				sm.drainSidecarBlocks()
 				msg.reply <- struct{}{}
 
 			case *invMsg:
@@ -1854,6 +1909,7 @@ out:
 
 			case *utreexoProofMsg:
 				sm.handleUtreexoProofMsg(msg)
+				sm.drainSidecarBlocks()
 
 			case *utreexoTTLsMsg:
 				sm.handleUtreexoTTLsMsg(msg)
@@ -1871,7 +1927,17 @@ out:
 				}
 				msg.reply <- peerID
 
+			case sidecarFetchMsg:
+				sm.proofFetchScheduled = false
+				sm.fetchHeaderBlocks(nil)
+
 			case processBlockMsg:
+				if sm.chain.IsUtreexoViewActive() && msg.block.UtreexoData() == nil {
+					if err := sm.attachMempoolProof(msg.block); err != nil {
+						msg.reply <- processBlockResponse{err: err}
+						continue
+					}
+				}
 				_, isOrphan, err := sm.chain.ProcessBlock(
 					msg.block, msg.flags)
 				if err != nil {
@@ -1879,6 +1945,7 @@ out:
 						isOrphan: false,
 						err:      err,
 					}
+					continue
 				}
 
 				msg.reply <- processBlockResponse{
@@ -2191,6 +2258,7 @@ func (sm *SyncManager) Pause() chan<- struct{} {
 // block, tx, and inv updates.
 func New(config *Config) (*SyncManager, error) {
 	sm := SyncManager{
+		proofPeerAddress:    config.ProofPeer,
 		peerNotifier:        config.PeerNotifier,
 		chain:               config.Chain,
 		txMemPool:           config.TxMemPool,

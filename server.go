@@ -22,6 +22,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/decred/dcrd/lru"
 	"github.com/utreexo/utreexo"
 	"github.com/utreexo/utreexod/addrmgr"
 	"github.com/utreexo/utreexod/bdkwallet"
@@ -32,7 +33,6 @@ import (
 	"github.com/utreexo/utreexod/chaincfg"
 	"github.com/utreexo/utreexod/chaincfg/chainhash"
 	"github.com/utreexo/utreexod/connmgr"
-	"github.com/decred/dcrd/lru"
 	"github.com/utreexo/utreexod/database"
 	"github.com/utreexo/utreexod/electrum"
 	"github.com/utreexo/utreexod/mempool"
@@ -523,7 +523,7 @@ func (sp *serverPeer) OnVersion(_ *peer.Peer, msg *wire.MsgVersion) *wire.MsgRej
 
 	// Also reject outbound peers that aren't utreexo nodes if we're a utreexo csn.
 	var wantServices wire.ServiceFlag
-	if sp.server.chain.IsUtreexoViewActive() {
+	if sp.server.chain.IsUtreexoViewActive() && cfg.UtreexoProofPeer == "" {
 		wantServices |= wire.SFNodeUtreexo
 	}
 	if !isInbound && !hasServices(msg.Services, wantServices) {
@@ -556,7 +556,7 @@ func (sp *serverPeer) OnVersion(_ *peer.Peer, msg *wire.MsgVersion) *wire.MsgRej
 		}
 
 		// Disconnect peers that aren't utreexo nodes if we're a csn.
-		if sp.server.chain.IsUtreexoViewActive() && !sp.IsUtreexoEnabled() {
+		if sp.server.chain.IsUtreexoViewActive() && !sp.IsUtreexoEnabled() && cfg.UtreexoProofPeer == "" {
 			peerLog.Infof("Disconnecting non-utreexo peer %v, as we're a utreexo "+
 				"node", sp)
 			sp.Disconnect()
@@ -3632,6 +3632,7 @@ func newServer(listenAddrs, agentBlacklist, agentWhitelist []string,
 	s.txMemPool = mempool.New(&txC)
 
 	s.syncManager, err = netsync.New(&netsync.Config{
+		ProofPeer:          cfg.UtreexoProofPeer,
 		PeerNotifier:       &s,
 		Chain:              s.chain,
 		TxMemPool:          s.txMemPool,
