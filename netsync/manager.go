@@ -210,19 +210,18 @@ func limitAdd(m map[chainhash.Hash]struct{}, hash chainhash.Hash, limit int) {
 // chain is in sync, the SyncManager handles incoming block and header
 // notifications and relays announcements of new blocks to peers.
 type SyncManager struct {
-	sidecarProofPeers map[string]struct{}
-	proofRequests     map[chainhash.Hash]*blockProofRequest
-	proofSequence     uint64
-	peerNotifier      PeerNotifier
-	started           int32
-	shutdown          int32
-	chain             *blockchain.BlockChain
-	txMemPool         *mempool.TxPool
-	chainParams       *chaincfg.Params
-	progressLogger    *blockProgressLogger
-	msgChan           chan interface{}
-	wg                sync.WaitGroup
-	quit              chan struct{}
+	proofRequests  map[chainhash.Hash]*blockProofRequest
+	proofSequence  uint64
+	peerNotifier   PeerNotifier
+	started        int32
+	shutdown       int32
+	chain          *blockchain.BlockChain
+	txMemPool      *mempool.TxPool
+	chainParams    *chaincfg.Params
+	progressLogger *blockProgressLogger
+	msgChan        chan interface{}
+	wg             sync.WaitGroup
+	quit           chan struct{}
 
 	// These fields should only be accessed from the blockHandler thread
 	rejectedTxns     map[chainhash.Hash]struct{}
@@ -842,11 +841,7 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockMsg) {
 			LeafDatas: append([]wire.LeafData(nil), utreexoProofMsg.proof.LeafDatas...),
 		}
 		var proofErr error
-		if _, native := sm.sidecarProofPeers[utreexoProofMsg.peer.Addr()]; native {
-			proofErr = translateSidecarTargets(udata.AccProof.Targets,
-				sm.chain.GetUtreexoView().NumLeaves())
-		}
-		if proofErr == nil && sm.independentProofs() {
+		if sm.independentProofs() {
 			proofErr = sm.verifyBlockProof(bmsg.block, &udata)
 		}
 		if proofErr != nil {
@@ -1921,7 +1916,7 @@ out:
 
 			case *blockMsg:
 				sm.handleBlockMsg(msg)
-				sm.drainSidecarBlocks()
+				sm.drainProofBlocks()
 				msg.reply <- struct{}{}
 
 			case *invMsg:
@@ -1932,7 +1927,7 @@ out:
 
 			case *utreexoProofMsg:
 				sm.handleUtreexoProofMsg(msg)
-				sm.drainSidecarBlocks()
+				sm.drainProofBlocks()
 
 			case *utreexoTTLsMsg:
 				sm.handleUtreexoTTLsMsg(msg)
@@ -1987,7 +1982,7 @@ out:
 		case now := <-proofTicker.C:
 			if sm.independentProofs() {
 				sm.scheduleProofs(now)
-				sm.drainSidecarBlocks()
+				sm.drainProofBlocks()
 				if sm.syncPeer != nil && !sm.headersBuildMode {
 					sm.fetchHeaderBlocks(nil)
 				}
@@ -2286,7 +2281,6 @@ func (sm *SyncManager) Pause() chan<- struct{} {
 // block, tx, and inv updates.
 func New(config *Config) (*SyncManager, error) {
 	sm := SyncManager{
-		sidecarProofPeers:   make(map[string]struct{}),
 		proofRequests:       make(map[chainhash.Hash]*blockProofRequest),
 		peerNotifier:        config.PeerNotifier,
 		chain:               config.Chain,
@@ -2303,10 +2297,6 @@ func New(config *Config) (*SyncManager, error) {
 		msgChan:             make(chan interface{}, config.MaxPeers*3),
 		quit:                make(chan struct{}),
 		feeEstimator:        config.FeeEstimator,
-	}
-
-	for _, address := range config.SidecarProofPeers {
-		sm.sidecarProofPeers[address] = struct{}{}
 	}
 
 	if sm.chain.IsUtreexoViewActive() {

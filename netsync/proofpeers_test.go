@@ -180,14 +180,6 @@ func TestProofAvailabilityDoesNotBlameBlockSource(t *testing.T) {
 	require.False(t, sm.waitingOnlyForProofs(), "proofs no longer block validation")
 }
 
-func TestSidecarTargetConversion(t *testing.T) {
-	targets := []uint64{0, 8, 12}
-	require.NoError(t, translateSidecarTargets(targets, 8))
-	require.Equal(t, []uint64{0, 1 << 63, 3 << 62}, targets)
-	require.Error(t, translateSidecarTargets([]uint64{15}, 8))
-	require.NoError(t, translateSidecarTargets(nil, 0))
-}
-
 func TestBlockCommitmentsBeforeProofAttribution(t *testing.T) {
 	params := chaincfg.RegressionNetParams
 	block := generateTestBlocks(t, &params, 1)[0]

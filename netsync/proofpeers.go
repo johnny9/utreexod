@@ -8,7 +8,6 @@ import (
 	"sort"
 	"time"
 
-	"github.com/utreexo/utreexo"
 	"github.com/utreexo/utreexod/blockchain"
 	"github.com/utreexo/utreexod/btcutil"
 	"github.com/utreexo/utreexod/chaincfg/chainhash"
@@ -274,24 +273,6 @@ func verifyBlockCommitments(block *btcutil.Block, segwit bool) error {
 	}
 	if segwit {
 		return blockchain.ValidateWitnessCommitment(block)
-	}
-	return nil
-}
-
-// translateSidecarTargets adapts only explicitly configured native-position
-// endpoints. Standard v0.6 proof providers already use fixed 63-row positions.
-func translateSidecarTargets(targets []uint64, leaves uint64) error {
-	rows := utreexo.TreeRows(leaves)
-	mask := (uint64(1) << (rows + 1)) - 1
-	for i, target := range targets {
-		if target >= mask {
-			return fmt.Errorf("sidecar target outside accumulator forest")
-		}
-		row := utreexo.DetectRow(target, rows)
-		if row > 0 && row <= rows {
-			start := (^uint64(0) << (rows + 1 - row)) & mask
-			targets[i] = target - start + (^uint64(0) << (64 - row))
-		}
 	}
 	return nil
 }

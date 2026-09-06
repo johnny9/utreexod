@@ -5,11 +5,9 @@ utreexod
 [![ISC License](https://img.shields.io/badge/license-ISC-blue.svg)](http://copyfree.org)
 [![GoDoc](https://img.shields.io/badge/godoc-reference-blue.svg)](https://pkg.go.dev/github.com/utreexo/utreexod)
 
-This fork's `core-sidecar-relay-v0.6.0` branch adds compact mempool and mining
-support with Bitcoin Core 31.1 and the sidecar's `v0.5.0-beta.1` transaction
-proof relay. It is based on upstream utreexod v0.6.0. See the
-[Core and sidecar setup guide](docs/core-sidecar-relay.md) for build instructions,
-peer configuration, pool RPC settings, and the current validation limits.
+This fork adds independent proof-peer selection and compact mempool mining to
+utreexod v0.6.0. See the [compact mining guide](docs/compact-mining.md) for
+peer configuration, pool RPC settings, and validation limits.
 
 utreexod is a full node bitcoin implementation with support for utreexo accumulators. Utreexo accumulator is
 an append only merkle forest data structure with support for deleting elements from the set. More information at

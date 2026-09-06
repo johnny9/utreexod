@@ -57,7 +57,7 @@ func (sm *SyncManager) attachMempoolProof(block *btcutil.Block) error {
 
 // Blocks and proofs arrive independently; drain ready pairs in chain order.
 // Do not enqueue onto our own channel while handling a message.
-func (sm *SyncManager) drainSidecarBlocks() {
+func (sm *SyncManager) drainProofBlocks() {
 	if !sm.independentProofs() {
 		return
 	}
