@@ -1133,6 +1133,15 @@ func (b *BlockChain) FetchUtreexoViewpoint(blockHash *chainhash.Hash) (*UtreexoV
 		return nil, err
 	}
 
+	// The assumed block has no downloaded block/state record until the first
+	// suffix block is processed. Its authenticated roots are still available,
+	// including when the imported snapshot is already at the header tip.
+	point := b.assumeUtreexoPoint
+	if utreexoView == nil && point.BlockHash != nil && *blockHash == *point.BlockHash &&
+		b.bestChain.Tip().height >= point.BlockHeight {
+		utreexoView = NewUtreexoViewpoint()
+		utreexoView.accumulator = utreexo.NewMapPollardFromRoots(point.Roots, point.NumLeaves)
+	}
 	return utreexoView, nil
 }
 

@@ -392,7 +392,7 @@ func btcdMain(serverChan chan<- *server) error {
 // in regression test mode and it already exists.
 func removeRegressionDB(dbPath string) error {
 	// Don't do anything if not in regression test mode.
-	if !cfg.RegressionTest {
+	if !cfg.RegressionTest || cfg.RegressionTestKeepDB {
 		return nil
 	}
 

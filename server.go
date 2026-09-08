@@ -3533,6 +3533,11 @@ func newServer(listenAddrs, agentBlacklist, agentWhitelist []string,
 	}
 
 	assumeUtreexoPoint := chainParams.AssumeUtreexoPoint
+	if cfg.assumeUtreexoSnapshot != nil {
+		assumeUtreexoPoint = *cfg.assumeUtreexoSnapshot
+		srvrLog.Warnf("Using explicitly trusted AssumeUtreexo snapshot at height %d (%s), SHA256 %s",
+			assumeUtreexoPoint.BlockHeight, assumeUtreexoPoint.BlockHash, cfg.AssumeUtreexoSnapshotSHA256)
+	}
 	if cfg.NoAssumeUtreexo {
 		assumeUtreexoPoint = chaincfg.AssumeUtreexo{}
 	}
@@ -3554,6 +3559,10 @@ func newServer(listenAddrs, agentBlacklist, agentWhitelist []string,
 		AssumeUtreexoPoint: assumeUtreexoPoint,
 	})
 	if err != nil {
+		return nil, err
+	}
+
+	if err := bindAssumeUtreexoSnapshot(s.db, cfg.AssumeUtreexoSnapshotSHA256, s.chain.BestSnapshot().Height); err != nil {
 		return nil, err
 	}
 

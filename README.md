@@ -8,6 +8,8 @@ utreexod
 This fork adds independent proof-peer selection and compact mempool mining to
 utreexod v0.6.0. See the [compact mining guide](docs/compact-mining.md) for
 peer configuration, pool RPC settings, and validation limits.
+It also accepts [custom AssumeUtreexo snapshots](docs/assumeutreexo-snapshots.md)
+exported by the sidecar, with a pinned SHA256 and a fresh compact-node database.
 
 utreexod is a full node bitcoin implementation with support for utreexo accumulators. Utreexo accumulator is
 an append only merkle forest data structure with support for deleting elements from the set. More information at

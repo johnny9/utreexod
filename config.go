@@ -118,11 +118,12 @@ type config struct {
 	TraceProfile  string `long:"traceprofile" description:"Write trace profile to the specified file"`
 
 	// Network options.
-	TestNet3        bool   `long:"testnet" description:"Use the test network"`
-	RegressionTest  bool   `long:"regtest" description:"Use the regression test network"`
-	SimNet          bool   `long:"simnet" description:"Use the simulation test network"`
-	SigNet          bool   `long:"signet" description:"Use the signet test network"`
-	SigNetChallenge string `long:"signetchallenge" description:"Connect to a custom signet network defined by this challenge instead of using the global default signet test network -- Can be specified multiple times"`
+	TestNet3             bool   `long:"testnet" description:"Use the test network"`
+	RegressionTest       bool   `long:"regtest" description:"Use the regression test network"`
+	RegressionTestKeepDB bool   `long:"regtestkeepdb" description:"Preserve the regression test database across restarts (regtest otherwise deletes it on startup)"`
+	SimNet               bool   `long:"simnet" description:"Use the simulation test network"`
+	SigNet               bool   `long:"signet" description:"Use the signet test network"`
+	SigNetChallenge      string `long:"signetchallenge" description:"Connect to a custom signet network defined by this challenge instead of using the global default signet test network -- Can be specified multiple times"`
 
 	// RPC server options and policy.
 	DisableTLS           bool     `long:"notls" description:"Disable TLS for the RPC server -- NOTE: This is only allowed if the RPC server is bound to localhost"`
@@ -173,9 +174,11 @@ type config struct {
 	BanThreshold   uint32        `long:"banthreshold" description:"Maximum allowed ban score before disconnecting and banning misbehaving peers."`
 
 	// Chain related options.
-	AddCheckpoints     []string `long:"addcheckpoint" description:"Add a custom checkpoint.  Format: '<height>:<hash>'"`
-	DisableCheckpoints bool     `long:"nocheckpoints" description:"Disable built-in checkpoints.  Don't do this unless you know what you're doing."`
-	NoAssumeUtreexo    bool     `long:"noassumeutreexo" description:"Disable starting from the assume utreexo point and start the initial block download from the genesis block"`
+	AddCheckpoints              []string `long:"addcheckpoint" description:"Add a custom checkpoint.  Format: '<height>:<hash>'"`
+	DisableCheckpoints          bool     `long:"nocheckpoints" description:"Disable built-in checkpoints.  Don't do this unless you know what you're doing."`
+	NoAssumeUtreexo             bool     `long:"noassumeutreexo" description:"Disable starting from the assume utreexo point and start the initial block download from the genesis block"`
+	AssumeUtreexoSnapshot       string   `long:"assumeutreexo-snapshot" description:"Load an explicitly trusted compact snapshot JSON file (requires its SHA256 pin and a fresh data directory)"`
+	AssumeUtreexoSnapshotSHA256 string   `long:"assumeutreexo-snapshot-sha256" description:"SHA256 of the trusted AssumeUtreexo snapshot file; retain both options on restart"`
 
 	// Relay and mempool policy.
 	BlocksOnly        bool    `long:"blocksonly" description:"Do not accept transactions from remote peers."`
@@ -224,14 +227,15 @@ type config struct {
 	DisableElectrum      bool     `long:"disableelectrum" description:"Disable the electrum server while the --watchonlywallet flag is on"`
 
 	// Cooked options ready for use.
-	lookup          func(string) ([]net.IP, error)
-	oniondial       func(string, string, time.Duration) (net.Conn, error)
-	dial            func(string, string, time.Duration) (net.Conn, error)
-	addCheckpoints  []chaincfg.Checkpoint
-	miningAddrs     []btcutil.Address
-	minRelayTxFee   btcutil.Amount
-	whitelists      []*net.IPNet
-	extendedPubkeys map[string]string
+	lookup                func(string) ([]net.IP, error)
+	oniondial             func(string, string, time.Duration) (net.Conn, error)
+	dial                  func(string, string, time.Duration) (net.Conn, error)
+	addCheckpoints        []chaincfg.Checkpoint
+	assumeUtreexoSnapshot *chaincfg.AssumeUtreexo
+	miningAddrs           []btcutil.Address
+	minRelayTxFee         btcutil.Amount
+	whitelists            []*net.IPNet
+	extendedPubkeys       map[string]string
 }
 
 // serviceOptions defines the configuration options for the daemon as a service on
@@ -1202,6 +1206,10 @@ func loadConfig() (*config, []string, error) {
 	// Set --noassumeutreexo if the node is not a utreexo node.
 	if cfg.NoUtreexo {
 		cfg.NoAssumeUtreexo = true
+	}
+	if err := cfg.loadAssumeUtreexoSnapshot(activeNetParams.Params); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return nil, nil, err
 	}
 
 	// Specifying --noonion means the onion address dial function results in

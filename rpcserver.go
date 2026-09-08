@@ -3468,6 +3468,12 @@ func handleGetUtreexoRoots(s *rpcServer, cmd interface{}, closeChan <-chan struc
 					"the database. Error: %v", c.BlockHash, err),
 			}
 		}
+		if view == nil {
+			return nil, &btcjson.RPCError{
+				Code:    btcjson.ErrRPCBlockNotFound,
+				Message: "Utreexo state is unavailable for the requested block",
+			}
+		}
 		for _, root := range view.GetRoots() {
 			getReply.Roots = append(getReply.Roots, hex.EncodeToString(root[:]))
 		}
