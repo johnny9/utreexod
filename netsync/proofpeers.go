@@ -53,7 +53,13 @@ func servesProof(services wire.ServiceFlag, height, tip, peerTip int32) bool {
 
 // independentProofs leaves the upstream committed-TTL download path unchanged.
 func (sm *SyncManager) independentProofs() bool {
-	return sm.chain.IsUtreexoViewActive() && sm.committedTTLAcc == nil
+	if !sm.chain.IsUtreexoViewActive() {
+		return false
+	}
+	// A configured TTL commitment remains present after AssumeUtreexo and on
+	// restart. Only blocks covered by it need the upstream TTL download path.
+	return sm.committedTTLAcc == nil ||
+		uint64(sm.chain.BestChainHeaderForkHeight())+1 >= sm.committedTTLAcc.NumLeaves
 }
 
 func (sm *SyncManager) waitingOnlyForProofs() bool {
@@ -118,20 +124,58 @@ func (sm *SyncManager) failProofPeer(source *peer.Peer, reason string) {
 	source.Disconnect()
 }
 
-// selectProofPeer balances requests across eligible peers, oldest assignment
-// first on ties. Only the sync-manager goroutine accesses this state.
+// noteProofProgress gives a responsive connection time to deliver the rest of
+// its bounded batch. Large proofs share one stream, so later requests must not
+// expire merely because earlier responses consumed the transfer budget.
+func (sm *SyncManager) noteProofProgress(source *peer.Peer, now time.Time) {
+	for hash, request := range sm.proofRequests {
+		if request.peer == source && sm.queuedUtreexoProofs[hash] == nil {
+			request.sent = now
+		}
+	}
+}
+
+// pauseProofTimeouts excludes local validation time: while the sync-manager
+// goroutine processes a block it cannot dispatch proofs already in msgChan.
+func (sm *SyncManager) pauseProofTimeouts(started, finished time.Time) {
+	if !finished.After(started) {
+		return
+	}
+	for _, request := range sm.proofRequests {
+		if request.peer != nil && request.sent.Before(started) {
+			request.sent = request.sent.Add(finished.Sub(started))
+		}
+	}
+}
+
+// selectProofPeer prefers peers advertising coverage of the requested height.
+// When none are available, a proof-only NODE_UTREEXO peer may retain a suffix
+// after an assumed checkpoint. Probe it with an ordinary, bounded proof request;
+// its service bit does not promise that history. Disconnects, invalid proofs,
+// and timeouts use the same failover path as advertised coverage.
+// Only the sync-manager goroutine accesses this state.
 func (sm *SyncManager) selectProofPeer(height, tip int32) *peer.Peer {
 	var selected *peer.Peer
 	var selectedState *peerSyncState
+	var selectedCoverage bool
 	for candidate, state := range sm.peerStates {
-		if state.proofFailed || !servesProof(state.services, height, tip, candidate.LastBlock()) {
+		if state.proofFailed {
 			continue
 		}
-		if selected == nil || len(state.requestedUtreexoProofs) < len(selectedState.requestedUtreexoProofs) ||
+		coverage := servesProof(state.services, height, tip, candidate.LastBlock())
+		if !coverage && (!state.services.HasFlag(wire.SFNodeUtreexo) || servesBlocks(state.services)) {
+			continue
+		}
+		if selected != nil && selectedCoverage && !coverage {
+			continue
+		}
+		if selected == nil || (coverage && !selectedCoverage) ||
+			len(state.requestedUtreexoProofs) < len(selectedState.requestedUtreexoProofs) ||
 			(len(state.requestedUtreexoProofs) == len(selectedState.requestedUtreexoProofs) &&
 				(state.proofLastAssigned < selectedState.proofLastAssigned ||
 					(state.proofLastAssigned == selectedState.proofLastAssigned && candidate.Addr() < selected.Addr()))) {
 			selected, selectedState = candidate, state
+			selectedCoverage = coverage
 		}
 	}
 	return selected

@@ -29,11 +29,21 @@ The RPC example disables TLS only for a loopback listener.
 | `NODE_UTREEXO` with `NODE_NETWORK_LIMITED` | Latest 288 blocks |
 | `NODE_UTREEXO_ARCHIVE` | Historical proofs without requiring block service |
 
+The scheduler prefers providers advertising coverage of the requested height.
+If none are available, it tries proof-only `NODE_UTREEXO` peers, which may retain
+proofs after an assumed checkpoint. This is a bounded availability probe, not an
+archive guarantee: the 32-pair work window, proof verification, and timeout and
+disconnect failover still apply. Explicit `NODE_NETWORK_LIMITED` ranges remain
+respected.
+
 Blocks and headers come from peers advertising block services. Proof-only peers
 need neither block-service bits nor witness support. Historical catch-up requires
 a proof provider covering the requested heights. Up to 32 block/proof pairs are
-pending; invalid proofs, disconnects, and 15-second timeouts retry another
-eligible provider while retaining downloaded blocks.
+pending; invalid proofs, disconnects, and 15 seconds without proof progress
+retry another eligible provider while retaining downloaded blocks. Local block
+validation time is excluded from that deadline. Mining readiness requires the
+validated block tip to match the greatest-work header, and `getblockchaininfo`
+reports the independently downloaded header height.
 
 Submit wallet transactions to a node that accepts ordinary transaction
 submissions and relays them to proof providers. Compact utreexod validates the
@@ -51,7 +61,11 @@ existing local mempool proof path. Only the current template is retained.
 
 `prune=550` is a block-pruning target in MiB, not a total disk limit. Regtest
 validation covers independent proof sources, failure recovery, transaction relay,
-mining, and matching accumulator roots. Mainnet catch-up, sustained load, and a
-combined reorg integration remain unvalidated. Production genesis synchronization,
+mining, and matching accumulator roots. Mainnet proof validation beyond the
+AssumeUtreexo checkpoint has also been observed on ARM64. Full mainnet catch-up,
+sustained load, and a combined reorg integration remain unvalidated. Production genesis synchronization,
 TTL proof serving, and compact-wallet proof acquisition are outside this setup;
 the upstream committed-TTL synchronization path is unchanged.
+
+See the [Orange Pi deployment notes](orangepi-compact-pool.md) for NVMe data
+storage, a loopback proof tunnel, Public Pool readiness and sync timing.

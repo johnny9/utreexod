@@ -1365,11 +1365,12 @@ func handleGetBlockChainInfo(s *rpcServer, cmd interface{}, closeChan <-chan str
 	params := s.cfg.ChainParams
 	chain := s.cfg.Chain
 	chainSnapshot := chain.BestSnapshot()
+	_, headerHeight := chain.BestHeader()
 
 	chainInfo := &btcjson.GetBlockChainInfoResult{
 		Chain:         params.Name,
 		Blocks:        chainSnapshot.Height,
-		Headers:       chainSnapshot.Height,
+		Headers:       headerHeight,
 		BestBlockHash: chainSnapshot.Hash.String(),
 		Difficulty:    getDifficultyRatio(chainSnapshot.Bits, params),
 		MedianTime:    chainSnapshot.MedianTime.Unix(),

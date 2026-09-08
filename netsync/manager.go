@@ -7,6 +7,7 @@ package netsync
 import (
 	"bytes"
 	"crypto/sha256"
+	"fmt"
 	"math/rand"
 	"net"
 	"os"
@@ -723,6 +724,14 @@ func (sm *SyncManager) current() bool {
 	if !sm.chain.IsCurrent() {
 		return false
 	}
+	// A compact node can have recent blocks while still waiting for proofs
+	// below its greatest-work header. Such a node cannot provide current work.
+	if sm.chain.IsUtreexoViewActive() {
+		header, _ := sm.chain.BestHeader()
+		if sm.chain.BestSnapshot().Hash != header {
+			return false
+		}
+	}
 
 	// if blockChain thinks we are current and we have no syncPeer it
 	// is probably right.
@@ -842,7 +851,9 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockMsg) {
 		}
 		var proofErr error
 		if sm.independentProofs() {
+			started := time.Now()
 			proofErr = sm.verifyBlockProof(bmsg.block, &udata)
+			sm.pauseProofTimeouts(started, time.Now())
 		}
 		if proofErr != nil {
 			sm.queuedBlocks[*blockHash] = bmsg
@@ -873,7 +884,9 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockMsg) {
 
 	// Process the block to include validation, best chain selection, orphan
 	// handling, etc.
+	validationStarted := time.Now()
 	_, isOrphan, err := sm.chain.ProcessBlock(bmsg.block, behaviorFlags)
+	sm.pauseProofTimeouts(validationStarted, time.Now())
 	if err != nil {
 		// When the error is a rule error, it means the block was simply
 		// rejected as opposed to something actually going wrong, so log
@@ -1226,6 +1239,29 @@ func (sm *SyncManager) fetchHeaderBlocks(peer *peerpkg.Peer) {
 	}
 }
 
+// initializeAssumedUtreexo checks the trusted checkpoint in the best header
+// chain. The header tip can already be beyond it after an interrupted bootstrap.
+func (sm *SyncManager) initializeAssumedUtreexo() error {
+	height := sm.chain.AssumeUtreexoHeight()
+	expected := sm.chain.AssumeUtreexoHash()
+	actual, err := sm.chain.HeaderHashByHeight(height)
+	if err != nil {
+		return fmt.Errorf("assumed Utreexo header at height %d: %w", height, err)
+	}
+	if !actual.IsEqual(&expected) {
+		return fmt.Errorf("assumed Utreexo checkpoint mismatch at height %d: expected %s, got %s",
+			height, expected, actual)
+	}
+
+	sm.chain.SetNewBestStateFromAssumedUtreexoPoint()
+	sm.chain.SetUtreexoStateFromAssumePoint()
+	sm.headersBuildMode = false
+	bestState := sm.chain.BestSnapshot()
+	log.Infof("Initialized assumed utreexo point at block %v(%d)",
+		bestState.Hash.String(), bestState.Height)
+	return nil
+}
+
 // handleHeadersMsg handles block header messages from all peers.  Headers are
 // requested when performing a headers-first sync.
 func (sm *SyncManager) handleHeadersMsg(hmsg *headersMsg) {
@@ -1270,26 +1306,10 @@ func (sm *SyncManager) handleHeadersMsg(hmsg *headersMsg) {
 
 	bestHash, bestHeight := sm.chain.BestHeader()
 	if sm.headersBuildMode && bestHeight >= sm.chain.AssumeUtreexoHeight() {
-		assumeUtreexoHash := sm.chain.AssumeUtreexoHash()
-		if !bestHash.IsEqual(&assumeUtreexoHash) {
-			log.Warnf("The node had hash %v hardcoded in but the valid proof-of-work "+
-				"chain has the hash %v at height %v. The user should not trust this "+
-				"software as genuine and there may be attempts to steal funds. The user "+
-				"should delete the datadir", sm.chain.AssumeUtreexoHash().String(),
-				bestHash.String(), bestHeight)
+		if err := sm.initializeAssumedUtreexo(); err != nil {
+			log.Errorf("Cannot initialize assumed Utreexo: %v", err)
 			os.Exit(1)
 		}
-
-		// We're done downloading headers up to the assumed utreexo point.
-		sm.headersBuildMode = false
-
-		// Set the best state and the utreexo state.
-		sm.chain.SetNewBestStateFromAssumedUtreexoPoint()
-		sm.chain.SetUtreexoStateFromAssumePoint()
-
-		bestState := sm.chain.BestSnapshot()
-		log.Infof("Initialized assumed utreexo point at block %v(%d)",
-			bestState.Hash.String(), bestState.Height)
 	}
 
 	if sm.headersFirstMode {
@@ -1357,6 +1377,7 @@ func (sm *SyncManager) handleUtreexoProofMsg(hmsg *utreexoProofMsg) {
 	delete(state.requestedUtreexoProofs, blockHash)
 	sm.queuedUtreexoProofs[blockHash] = hmsg
 	if sm.independentProofs() {
+		sm.noteProofProgress(peer, time.Now())
 		return
 	}
 
@@ -2316,6 +2337,13 @@ func New(config *Config) (*SyncManager, error) {
 	if sm.chain.IsUtreexoViewActive() && sm.chain.IsAssumeUtreexo() {
 		log.Info("Assumed Utreexo is enabled. Downloading headers...")
 		sm.headersBuildMode = true
+		// A previous run may have persisted every header without validating
+		// the first post-checkpoint block. No new headers need arrive then.
+		if _, height := sm.chain.BestHeader(); height >= sm.chain.AssumeUtreexoHeight() {
+			if err := sm.initializeAssumedUtreexo(); err != nil {
+				return nil, err
+			}
+		}
 	}
 
 	sm.chain.Subscribe(sm.handleBlockchainNotification)

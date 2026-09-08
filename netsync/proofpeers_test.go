@@ -117,6 +117,45 @@ func TestProofTimeoutReassignsAndQuarantinesConnection(t *testing.T) {
 	require.Same(t, b, sm.proofRequests[hashes[0]].peer)
 }
 
+func TestProofBatchProgressRenewsOnlyItsProvider(t *testing.T) {
+	sm, hashes := proofTestManager(t, 3)
+	a := proofTestPeer(t, sm, "127.0.0.1:10001", wire.SFNodeUtreexoArchive)
+	b := proofTestPeer(t, sm, "127.0.0.1:10002", wire.SFNodeUtreexoArchive)
+	started := time.Now()
+	for i, hash := range hashes {
+		require.True(t, sm.trackProof(hash, int32(i+1)))
+		sm.proofRequests[hash].peer = a
+		sm.proofRequests[hash].sent = started
+	}
+	sm.proofRequests[hashes[2]].peer = b
+	sm.queuedUtreexoProofs[hashes[0]] = &utreexoProofMsg{peer: a}
+	progress := started.Add(proofRequestTimeout - time.Second)
+	sm.noteProofProgress(a, progress)
+	require.Equal(t, started, sm.proofRequests[hashes[0]].sent, "completed responses need no renewed deadline")
+	require.Equal(t, progress, sm.proofRequests[hashes[1]].sent)
+	require.Equal(t, started, sm.proofRequests[hashes[2]].sent, "another provider cannot mask a stalled connection")
+	sm.scheduleProofs(started.Add(proofRequestTimeout + time.Second))
+	require.False(t, sm.peerStates[a].proofFailed)
+	require.True(t, sm.peerStates[b].proofFailed)
+	sm.scheduleProofs(progress.Add(proofRequestTimeout + time.Second))
+	require.True(t, sm.peerStates[a].proofFailed, "a stalled batch must still time out after progress stops")
+}
+
+func TestLocalValidationDoesNotConsumeProofDeadline(t *testing.T) {
+	sm, hashes := proofTestManager(t, 2)
+	a := proofTestPeer(t, sm, "127.0.0.1:10001", wire.SFNodeUtreexoArchive)
+	requested := time.Now()
+	require.True(t, sm.trackProof(hashes[0], 1))
+	sm.scheduleProofs(requested)
+	started := requested.Add(time.Second)
+	finished := started.Add(3 * proofRequestTimeout)
+	sm.pauseProofTimeouts(started, finished)
+	sm.scheduleProofs(finished.Add(proofRequestTimeout - 2*time.Second))
+	require.False(t, sm.peerStates[a].proofFailed)
+	sm.scheduleProofs(finished.Add(proofRequestTimeout))
+	require.True(t, sm.peerStates[a].proofFailed, "only local work is excluded, not actual peer inactivity")
+}
+
 func TestFailedProofDiscardsOnlyProviderData(t *testing.T) {
 	sm, hashes := proofTestManager(t, 2)
 	a := proofTestPeer(t, sm, "127.0.0.1:10001", wire.SFNodeUtreexoArchive)
@@ -138,18 +177,43 @@ func TestFailedProofDiscardsOnlyProviderData(t *testing.T) {
 	}
 }
 
-func TestProofWaitsForCapableProvider(t *testing.T) {
+func TestProofProbesUnspecifiedHistoryAndPrefersAdvertisedCoverage(t *testing.T) {
 	sm, hashes := proofTestManager(t, 2)
 	proofTestPeer(t, sm, "127.0.0.1:10000", wire.SFNodeNetwork)
 	newOnly := proofTestPeer(t, sm, "127.0.0.1:10001", wire.SFNodeUtreexo)
 	require.True(t, sm.trackProof(hashes[0], 1))
 	require.True(t, sm.trackProof(hashes[1], 2))
 	sm.scheduleProofs(time.Now())
-	require.Nil(t, sm.proofRequests[hashes[0]].peer)
+	require.Same(t, newOnly, sm.proofRequests[hashes[0]].peer)
 	require.Same(t, newOnly, sm.proofRequests[hashes[1]].peer)
 	archive := proofTestPeer(t, sm, "127.0.0.1:10002", wire.SFNodeUtreexoArchive)
-	sm.scheduleProofs(time.Now())
+	require.Same(t, archive, sm.selectProofPeer(1, 2))
+	// A missing historical proof must release the fallback request and preserve
+	// the separately downloaded block for an advertised provider.
+	sm.queuedBlocks[hashes[0]] = &blockMsg{}
+	sm.scheduleProofs(time.Now().Add(proofRequestTimeout + time.Second))
+	require.True(t, sm.peerStates[newOnly].proofFailed)
 	require.Same(t, archive, sm.proofRequests[hashes[0]].peer)
+	require.NotNil(t, sm.queuedBlocks[hashes[0]])
+}
+
+func TestProofFallbackRemainsBoundedAndHonorsLimitedCoverage(t *testing.T) {
+	sm, hashes := proofTestManager(t, maxProofWork+1)
+	core := proofTestPeer(t, sm, "127.0.0.1:10000", wire.SFNodeNetwork)
+	limited := proofTestPeer(t, sm, "127.0.0.1:10001", wire.SFNodeUtreexo|wire.SFNodeNetworkLimited)
+	// proofTestPeer has no advertised tip, so use an older synthetic height to
+	// exercise selection outside the explicit 288-block promise.
+	require.Nil(t, sm.selectProofPeer(-1000, 1000))
+	fallback := proofTestPeer(t, sm, "127.0.0.1:10002", wire.SFNodeUtreexo)
+	require.Same(t, fallback, sm.selectProofPeer(-1000, 1000))
+	delete(sm.peerStates, limited)
+	for i, hash := range hashes[:maxProofWork] {
+		require.True(t, sm.trackProof(hash, int32(i+1)))
+	}
+	require.False(t, sm.trackProof(hashes[maxProofWork], maxProofWork+1))
+	sm.scheduleProofs(time.Now())
+	require.Empty(t, sm.peerStates[core].requestedUtreexoProofs)
+	require.Len(t, sm.peerStates[fallback].requestedUtreexoProofs, maxProofWork)
 }
 
 func TestObsoleteProofWorkIsReleased(t *testing.T) {
