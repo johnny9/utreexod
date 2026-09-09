@@ -1687,10 +1687,9 @@ func (sp *serverPeer) OnNotFound(p *peer.Peer, msg *wire.MsgNotFound) {
 		case wire.InvTypeWitnessTx:
 			numTxns++
 		case wire.InvTypeWitnessUtreexoTx:
-			// Proofs are tied to a moving accumulator tip and providers may
-			// evict their bounded preparation cache after announcing a tx.
-			// A cache miss is not misbehavior; release the request below.
+			numTxns++
 		case wire.InvTypeUtreexoTx:
+			numTxns++
 		default:
 			peerLog.Debugf("Invalid inv type '%d' in notfound message from %s",
 				inv.Type, sp)

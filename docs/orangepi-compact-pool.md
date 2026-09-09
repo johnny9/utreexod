@@ -73,7 +73,9 @@ Total observed wall time was about 19 hours 19 minutes, including about
 8 hours 44 minutes stalled. Excluding that stall gives approximately
 10 hours 36 minutes; this is not an uninterrupted benchmark and excludes
 earlier header bootstrap and sidecar recovery. The current branch fixes header
-tracking and the cache-miss ban; a fresh uninterrupted timing run is still needed.
+tracking. The temporary proof-cache-miss ban exemption was later removed after
+the sidecar gained requested proof regeneration; normal transaction `notfound`
+penalties apply again. A fresh uninterrupted timing run is still needed.
 
 For elapsed-time measurements, record when block 943014 is first validated and
 sample the validated block height alongside Core's current height. The

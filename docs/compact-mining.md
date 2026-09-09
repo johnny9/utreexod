@@ -47,12 +47,13 @@ reports the independently downloaded header height.
 
 Header download continues when new blocks are announced during compact IBD,
 even while older block proofs are outstanding. Transaction inventories are
-deferred until validation catches up. A proof provider can return `notfound`
-when its bounded transaction-preparation cache expires or evicts an announced
-entry: the request is released for later announcements without adding ban
-points. Invalid proofs and missing block responses keep their existing failure
-handling. A sidecar may reconnect when its transaction-proof anchor changes;
-this does not require disabling peer banning.
+deferred until validation catches up. Proof-aware transaction `notfound` replies
+use the normal transaction ban scoring: ten transient points per missing
+transaction, with disconnection and banning above the configured threshold.
+The temporary exemption for proof-cache misses has been removed. The sidecar
+regenerates requested expired/evicted preparations when possible instead of
+immediately replying `notfound`. A sidecar may reconnect when its transaction
+proof anchor changes; normal proof-provider failover handles that reconnect.
 
 Full block proofs are checked before block processing even when the mempool
 already remembers proofs for the same inputs. Transaction partial-proof checks
