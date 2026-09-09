@@ -962,9 +962,15 @@ func (b *BlockChain) verifyUData(ud *wire.UData, txIns []*wire.TxIn, remember, f
 		delHashes = append(delHashes, ld.LeafHash())
 	}
 
-	// Acquire read lock before accessing the accumulator state.
-	b.chainLock.RLock()
-	defer b.chainLock.RUnlock()
+	// Remembering also promotes leaves already present as proof siblings.
+	// Hold the chain write lock while updating their node metadata.
+	if remember {
+		b.chainLock.Lock()
+		defer b.chainLock.Unlock()
+	} else {
+		b.chainLock.RLock()
+		defer b.chainLock.RUnlock()
+	}
 
 	// VerifyBatchProof checks that the utreexo proofs are valid without
 	// mutating the accumulator.
@@ -985,6 +991,18 @@ func (b *BlockChain) verifyUData(ud *wire.UData, txIns []*wire.TxIn, remember, f
 	}
 
 	if remember {
+		// utreexo v0.18 skips already-expanded paths during Ingest, leaving
+		// an existing proof sibling's Remember flag false even when it is
+		// now a verified transaction input. Promote each verified target so
+		// removing its sibling cannot discard a live mempool input proof.
+		for _, hash := range delHashes {
+			node, found := b.utreexoView.accumulator.Nodes.Get(hash)
+			if !found {
+				return fmt.Errorf("verified input %s missing after proof ingestion", hash)
+			}
+			node.Remember = true
+			b.utreexoView.accumulator.Nodes.Put(hash, node)
+		}
 		log.Debugf("cached hashes: %v", delHashes)
 	}
 
@@ -1069,6 +1087,16 @@ func (b *BlockChain) PruneFromAccumulator(leaves []wire.LeafData) error {
 	}
 
 	log.Debugf("uncaching hashes: %v", hashes)
+	// v0.18 Prune does not persist a cleared Remember flag when a sibling
+	// prevents immediate pruning. Clear it under the chain write lock first,
+	// so releasing the sibling later can reclaim both unreferenced leaves.
+	for _, hash := range hashes {
+		node, found := b.utreexoView.accumulator.Nodes.Get(hash)
+		if found {
+			node.Remember = false
+			b.utreexoView.accumulator.Nodes.Put(hash, node)
+		}
+	}
 
 	err := b.utreexoView.accumulator.Prune(hashes)
 	if err != nil {

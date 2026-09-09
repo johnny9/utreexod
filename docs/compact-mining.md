@@ -66,6 +66,13 @@ pruning a proof still needed by the surviving transaction. This prevents a
 valid replacement from entering the mempool and then breaking template
 generation because its shared input proof was uncached with the old entry.
 
+The v0.18 accumulator adapter also promotes a cached proof sibling to a
+remembered input after successful transaction verification, and persists cleared
+remember flags when an input is released. Reusing an expanded proof path must
+neither discard a surviving input on the next block nor retain unused siblings
+indefinitely. Template selection keeps its leaf-data snapshot instead of fetching
+the same transaction again after a concurrent replacement may have removed it.
+
 Submit wallet transactions to a node that accepts ordinary transaction
 submissions and relays them to proof providers. Compact utreexod validates the
 proof-bearing transactions it receives and maintains its own mempool. Point the

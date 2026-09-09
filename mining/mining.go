@@ -552,6 +552,7 @@ func (g *BlkTmplGenerator) NewBlockTemplate(payToAddress btcutil.Address) (*Bloc
 	blockTxns := make([]*btcutil.Tx, 0, len(sourceTxns))
 	blockTxns = append(blockTxns, coinbaseTx)
 	blockUtxos := blockchain.NewUtxoViewpoint()
+	blockLeaves := make(map[chainhash.Hash][]wire.LeafData)
 
 	// dependers is used to track transactions which depend on another
 	// transaction in the source pool.  This, in conjunction with the
@@ -608,6 +609,10 @@ mempoolLoop:
 				err = fmt.Errorf("leaf/input count mismatch")
 			}
 			if err == nil {
+				// Keep the same leaf snapshot used to select this transaction.
+				// RBF can remove its pool entry while the template is assembled.
+				leaves = append([]wire.LeafData(nil), leaves...)
+				blockLeaves[*tx.Hash()] = leaves
 				for _, leaf := range leaves {
 					if !leaf.IsUnconfirmed() {
 						utxos.Entries()[leaf.OutPoint] = blockchain.NewUtxoEntry(wire.NewTxOut(leaf.Amount, leaf.PkScript), leaf.Height, leaf.IsCoinBase)
@@ -957,11 +962,7 @@ mempoolLoop:
 				continue
 			}
 
-			leafDatas, err := g.txSource.FetchLeafDatas(tx.Hash())
-			if err != nil {
-				return nil, fmt.Errorf("failed to fetch utreexo leaf "+
-					"data for tx %s: %v", tx.Hash(), err)
-			}
+			leafDatas := blockLeaves[*tx.Hash()]
 
 			for i := range tx.MsgTx().TxIn {
 				// Skip same-block spends using the inskip

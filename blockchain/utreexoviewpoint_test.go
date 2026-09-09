@@ -10,7 +10,41 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"github.com/utreexo/utreexo"
+	"github.com/utreexo/utreexod/chaincfg"
+	"github.com/utreexo/utreexod/chaincfg/chainhash"
+	"github.com/utreexo/utreexod/wire"
 )
+
+func TestRememberPreviouslyCachedProofSibling(t *testing.T) {
+	genesis := newBlockNode(&chaincfg.RegressionNetParams.GenesisBlock.Header, nil)
+	chain := &BlockChain{bestChain: newChainView(genesis), utreexoView: NewUtreexoViewpoint()}
+	leaves := []wire.LeafData{
+		{BlockHash: genesis.hash, OutPoint: wire.OutPoint{Hash: chainhash.Hash{1}}, Amount: 1000, PkScript: []byte{0x51}},
+		{BlockHash: genesis.hash, OutPoint: wire.OutPoint{Hash: chainhash.Hash{2}}, Amount: 2000, PkScript: []byte{0x51}},
+	}
+	full := utreexo.NewMapPollard(true)
+	require.NoError(t, full.Modify([]utreexo.Leaf{{Hash: leaves[0].LeafHash()}, {Hash: leaves[1].LeafHash()}}, nil, utreexo.Proof{}))
+	chain.utreexoView.accumulator = utreexo.NewMapPollardFromRoots(full.GetRoots(), full.NumLeaves)
+	chain.utreexoView.accumulator.TotalRows = full.TotalRows
+	for i, leaf := range leaves {
+		proof, err := full.Prove([]utreexo.Hash{leaf.LeafHash()})
+		require.NoError(t, err)
+		if i == 1 {
+			// Its sibling is already available from the first transaction.
+			proof.Proof = nil
+		}
+		ud := &wire.UData{LeafDatas: []wire.LeafData{leaf}, AccProof: proof}
+		require.NoError(t, chain.VerifyUData(ud, []*wire.TxIn{wire.NewTxIn(&leaf.OutPoint, nil, nil)}, true))
+	}
+	require.NoError(t, chain.PruneFromAccumulator(leaves[:1]))
+	proof, err := chain.GenerateUData(leaves[1:])
+	require.NoError(t, err, "a verified input must survive removal of its previously cached sibling")
+	require.NoError(t, full.Verify([]utreexo.Hash{leaves[1].LeafHash()}, proof.AccProof, false))
+	// Removing the final owner must still reclaim the cached pair.
+	require.NoError(t, chain.PruneFromAccumulator(leaves[1:]))
+	_, err = chain.GenerateUData(leaves[1:])
+	require.Error(t, err)
+}
 
 func TestChainTipProofSerialize(t *testing.T) {
 	t.Parallel()
