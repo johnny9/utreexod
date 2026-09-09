@@ -1923,6 +1923,76 @@ func TestRBFUtreexoDataFailure(t *testing.T) {
 	testPoolMembership(ctx, replacementTx, false, false)
 }
 
+// TestSharedUtreexoProofOwnership exercises real pool transitions against a
+// recording accumulator. A transfer between owners must preserve the proof,
+// while removing its last owner must still release it.
+func TestSharedUtreexoProofOwnership(t *testing.T) {
+	for _, mode := range []string{"replacement", "orphan promotion"} {
+		t.Run(mode, func(t *testing.T) {
+			harness, _, err := newPoolHarness(&chaincfg.MainNetParams)
+			require.NoError(t, err)
+			ctx := &testContext{t, harness}
+			coinbase := ctx.addCoinbaseTx(2)
+			first := txOutToSpendableOut(coinbase, 0)
+			second := txOutToSpendableOut(coinbase, 1)
+			parent, err := harness.CreateSignedTx([]spendableOutput{first}, 1, btcutil.SatoshiPerBitcoin, true)
+			require.NoError(t, err)
+			makeLeaf := func(tx *btcutil.Tx, index uint32, height int32) wire.LeafData {
+				return wire.LeafData{OutPoint: wire.OutPoint{Hash: *tx.Hash(), Index: index},
+					Height: height, Amount: tx.MsgTx().TxOut[index].Value, PkScript: harness.payScript}
+			}
+			parentData := &wire.UData{LeafDatas: []wire.LeafData{makeLeaf(coinbase, 0, 1)}}
+			cached := make(map[wire.OutPoint]bool)
+			harness.txPool.cfg.IsUtreexoViewActive = func() bool { return true }
+			harness.txPool.cfg.VerifyUData = func(ud *wire.UData, _ []*wire.TxIn, remember bool) error {
+				if remember {
+					for _, leaf := range ud.LeafDatas {
+						if !leaf.IsUnconfirmed() {
+							cached[leaf.OutPoint] = true
+						}
+					}
+				}
+				return nil
+			}
+			harness.txPool.cfg.PruneFromAccumulator = func(leaves []wire.LeafData) error {
+				for _, leaf := range leaves {
+					delete(cached, leaf.OutPoint)
+				}
+				return nil
+			}
+			if mode == "replacement" {
+				_, err = harness.txPool.ProcessTransaction(parent, parentData, false, false, 0)
+				require.NoError(t, err)
+				replacement, err := harness.CreateSignedTx([]spendableOutput{first}, 1, 3*btcutil.SatoshiPerBitcoin, false)
+				require.NoError(t, err)
+				_, err = harness.txPool.ProcessTransaction(replacement, parentData.Copy(), false, false, 0)
+				require.NoError(t, err)
+				testPoolMembership(ctx, parent, false, false)
+				testPoolMembership(ctx, replacement, false, true)
+				require.True(t, cached[parentData.LeafDatas[0].OutPoint], "RBF must keep its shared input proof")
+				harness.txPool.RemoveTransaction(replacement, false)
+			} else {
+				child, err := harness.CreateSignedTx([]spendableOutput{txOutToSpendableOut(parent, 0), second},
+					1, btcutil.SatoshiPerBitcoin, false)
+				require.NoError(t, err)
+				childData := &wire.UData{LeafDatas: []wire.LeafData{makeLeaf(parent, 0, -1), makeLeaf(coinbase, 1, 1)}}
+				_, err = harness.txPool.ProcessTransaction(child, childData, true, false, 0)
+				require.NoError(t, err)
+				testPoolMembership(ctx, child, true, false)
+				_, err = harness.txPool.ProcessTransaction(parent, parentData, false, false, 0)
+				require.NoError(t, err)
+				testPoolMembership(ctx, child, false, true)
+				require.True(t, cached[childData.LeafDatas[1].OutPoint], "promotion must keep its confirmed input proof")
+				harness.txPool.RemoveTransaction(child, false)
+				require.True(t, cached[parentData.LeafDatas[0].OutPoint], "removing child must retain parent proof")
+				harness.txPool.RemoveTransaction(parent, false)
+			}
+			require.Empty(t, cached, "last owner must release its cached proofs")
+			require.Empty(t, harness.txPool.leafRefs)
+		})
+	}
+}
+
 // TestRemoveTransactionCleansUtreexoData verifies that removing a transaction
 // from the mempool also removes its cached utreexo leaf data.
 func TestRemoveTransactionCleansUtreexoData(t *testing.T) {

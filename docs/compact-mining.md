@@ -60,6 +60,12 @@ can reuse those cached hashes; using them to precheck a block could hide a
 corrupt supplied hash until block processing. The full check keeps that failure
 attributed to the proof provider and allows retry with another provider.
 
+The mempool tracks input-proof ownership across both accepted transactions and
+orphans. Fee replacement and orphan promotion transfer ownership without
+pruning a proof still needed by the surviving transaction. This prevents a
+valid replacement from entering the mempool and then breaking template
+generation because its shared input proof was uncached with the old entry.
+
 Submit wallet transactions to a node that accepts ordinary transaction
 submissions and relays them to proof providers. Compact utreexod validates the
 proof-bearing transactions it receives and maintains its own mempool. Point the

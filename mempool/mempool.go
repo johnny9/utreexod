@@ -194,6 +194,7 @@ type TxPool struct {
 	cfg           Config
 	pool          map[chainhash.Hash]*TxDesc
 	poolLeaves    map[chainhash.Hash][]wire.LeafData
+	leafRefs      map[wire.OutPoint]uint32
 	orphans       map[chainhash.Hash]*orphanTx
 	orphanUData   map[chainhash.Hash]*wire.UData
 	orphansByPrev map[wire.OutPoint]map[chainhash.Hash]*btcutil.Tx
@@ -229,15 +230,8 @@ func (mp *TxPool) removeOrphan(tx *btcutil.Tx, removeRedeemers bool) {
 	if mp.cfg.IsUtreexoViewActive() {
 		ud, found := mp.orphanUData[*tx.Hash()]
 		if found {
-			// Remove related utreexo data.
-			//
-			// TODO uncache from the accumulator.
 			delete(mp.orphanUData, *tx.Hash())
-			err := mp.cfg.PruneFromAccumulator(ud.LeafDatas)
-			if err != nil {
-				log.Debugf("error while pruning proof for orphan tx %v"+
-					"from the accumulator.", tx.Hash())
-			}
+			mp.releaseLeafReferences(ud.LeafDatas)
 		}
 	}
 
@@ -381,6 +375,7 @@ func (mp *TxPool) addOrphan(tx *btcutil.Tx, utreexoData *wire.UData, tag Tag) {
 		// here since we've already verified it above.
 		mp.cfg.VerifyUData(utreexoData, tx.MsgTx().TxIn, true)
 		mp.orphanUData[*tx.Hash()] = utreexoData
+		mp.retainLeafReferences(utreexoData.LeafDatas)
 	}
 
 	log.Debugf("Stored orphan transaction %v (total: %d)", tx.Hash(),
@@ -624,6 +619,7 @@ func (mp *TxPool) addUtreexoData(tx *btcutil.Tx, udata *wire.UData) error {
 		return fmt.Errorf("error while ingesting proof. %v", err)
 	}
 	mp.poolLeaves[*tx.Hash()] = udata.LeafDatas
+	mp.retainLeafReferences(udata.LeafDatas)
 
 	return nil
 }
@@ -639,11 +635,32 @@ func (mp *TxPool) removeUtreexoData(txHash *chainhash.Hash) {
 	}
 	delete(mp.poolLeaves, *txHash)
 
-	if mp.cfg.PruneFromAccumulator != nil {
-		err := mp.cfg.PruneFromAccumulator(leaves)
-		if err != nil {
-			log.Debugf("error while pruning proof for tx %v "+
-				"from the accumulator: %v", txHash, err)
+	mp.releaseLeafReferences(leaves)
+}
+
+// Each main-pool or orphan entry owns a reference to its input proofs. RBF
+// ingests the replacement before removing conflicts; orphan promotion likewise
+// adds to the main pool before removing the orphan. Pruning the old owner must
+// not uncache proofs still needed by the new one. Call with the write lock held.
+func (mp *TxPool) retainLeafReferences(leaves []wire.LeafData) {
+	for _, leaf := range leaves {
+		mp.leafRefs[leaf.OutPoint]++
+	}
+}
+
+func (mp *TxPool) releaseLeafReferences(leaves []wire.LeafData) {
+	var unused []wire.LeafData
+	for _, leaf := range leaves {
+		if mp.leafRefs[leaf.OutPoint] > 1 {
+			mp.leafRefs[leaf.OutPoint]--
+			continue
+		}
+		delete(mp.leafRefs, leaf.OutPoint)
+		unused = append(unused, leaf)
+	}
+	if len(unused) > 0 && mp.cfg.PruneFromAccumulator != nil {
+		if err := mp.cfg.PruneFromAccumulator(unused); err != nil {
+			log.Debugf("error pruning unreferenced mempool proofs: %v", err)
 		}
 	}
 }
@@ -1942,6 +1959,7 @@ func New(cfg *Config) *TxPool {
 		cfg:            *cfg,
 		pool:           make(map[chainhash.Hash]*TxDesc),
 		poolLeaves:     make(map[chainhash.Hash][]wire.LeafData),
+		leafRefs:       make(map[wire.OutPoint]uint32),
 		orphans:        make(map[chainhash.Hash]*orphanTx),
 		orphanUData:    make(map[chainhash.Hash]*wire.UData),
 		orphansByPrev:  make(map[wire.OutPoint]map[chainhash.Hash]*btcutil.Tx),
