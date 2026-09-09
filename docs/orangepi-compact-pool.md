@@ -59,12 +59,21 @@ advancing height 1 to 2 with changed accumulator roots. Independent proof-provid
 failover and matching accumulator roots are also covered by the sidecar's
 Core/utreexod integration test.
 
-As of 2026-09-08 21:16 UTC, mainnet synchronization had validated 6,189 blocks
-after the assumed checkpoint in about 2 hours 41 minutes. The recent rate was
-about 2,300 blocks/hour, suggesting roughly 10 hours total for this checkpoint's
-23,097-block suffix. This is an estimate from an unfinished run and includes
-deployment-time restarts; it excludes earlier header bootstrap and sidecar
-recovery. Full mainnet catch-up and a mainnet pool job are not yet verified.
+At 2026-09-09 13:54 UTC, the compact node, Core and sidecar matched at height
+966214. The sidecar's accumulator roots and leaf count matched the node, and
+Public Pool delivered a Stratum job matching the node's block template. This
+mainnet check did not submit a share or mine a block.
+
+The first post-checkpoint block was validated at 2026-09-08 18:34:37 UTC. The
+23,090-block suffix through height 966103 took about 10 hours 32 minutes.
+A stale header target and a ban caused by normal transaction-proof cache misses
+then stalled the original build. After a restart at 13:50:26 UTC, validation
+continued from the existing database and reached Core's live tip by 13:54 UTC.
+Total observed wall time was about 19 hours 19 minutes, including about
+8 hours 44 minutes stalled. Excluding that stall gives approximately
+10 hours 36 minutes; this is not an uninterrupted benchmark and excludes
+earlier header bootstrap and sidecar recovery. The current branch fixes header
+tracking and the cache-miss ban; a fresh uninterrupted timing run is still needed.
 
 For elapsed-time measurements, record when block 943014 is first validated and
 sample the validated block height alongside Core's current height. The

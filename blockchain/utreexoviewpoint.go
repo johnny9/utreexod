@@ -924,6 +924,18 @@ func (b *BlockChain) IsAssumeUtreexo() bool {
 // This function does not modify the underlying UtreexoViewpoint.
 // This function is safe for concurrent access.
 func (b *BlockChain) VerifyUData(ud *wire.UData, txIns []*wire.TxIn, remember bool) error {
+	return b.verifyUData(ud, txIns, remember, false)
+}
+
+// VerifyFullUData reconstructs leaves and checks the supplied full block proof,
+// even when the mempool already remembers a proof for these inputs.
+// Unlike transaction partial proofs, a block proof must validate on its own.
+// This function is safe for concurrent access and does not remember the proof.
+func (b *BlockChain) VerifyFullUData(ud *wire.UData, txIns []*wire.TxIn) error {
+	return b.verifyUData(ud, txIns, false, true)
+}
+
+func (b *BlockChain) verifyUData(ud *wire.UData, txIns []*wire.TxIn, remember, full bool) error {
 	// Nothing to prove.
 	if len(txIns) == 0 {
 		return nil
@@ -956,7 +968,11 @@ func (b *BlockChain) VerifyUData(ud *wire.UData, txIns []*wire.TxIn, remember bo
 
 	// VerifyBatchProof checks that the utreexo proofs are valid without
 	// mutating the accumulator.
-	err = b.utreexoView.accumulator.VerifyPartialProof(ud.AccProof.Targets, delHashes, ud.AccProof.Proof, remember)
+	if full {
+		err = b.utreexoView.accumulator.Verify(delHashes, ud.AccProof, false)
+	} else {
+		err = b.utreexoView.accumulator.VerifyPartialProof(ud.AccProof.Targets, delHashes, ud.AccProof.Proof, remember)
+	}
 	if err != nil {
 		str := "Verify fail. All txIns-leaf datas:\n"
 		for i, txIn := range txIns {

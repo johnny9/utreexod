@@ -45,6 +45,21 @@ validation time is excluded from that deadline. Mining readiness requires the
 validated block tip to match the greatest-work header, and `getblockchaininfo`
 reports the independently downloaded header height.
 
+Header download continues when new blocks are announced during compact IBD,
+even while older block proofs are outstanding. Transaction inventories are
+deferred until validation catches up. A proof provider can return `notfound`
+when its bounded transaction-preparation cache expires or evicts an announced
+entry: the request is released for later announcements without adding ban
+points. Invalid proofs and missing block responses keep their existing failure
+handling. A sidecar may reconnect when its transaction-proof anchor changes;
+this does not require disabling peer banning.
+
+Full block proofs are checked before block processing even when the mempool
+already remembers proofs for the same inputs. Transaction partial-proof checks
+can reuse those cached hashes; using them to precheck a block could hide a
+corrupt supplied hash until block processing. The full check keeps that failure
+attributed to the proof provider and allows retry with another provider.
+
 Submit wallet transactions to a node that accepts ordinary transaction
 submissions and relays them to proof providers. Compact utreexod validates the
 proof-bearing transactions it receives and maintains its own mempool. Point the
@@ -62,8 +77,9 @@ existing local mempool proof path. Only the current template is retained.
 `prune=550` is a block-pruning target in MiB, not a total disk limit. Regtest
 validation covers independent proof sources, failure recovery, transaction relay,
 mining, and matching accumulator roots. Mainnet proof validation beyond the
-AssumeUtreexo checkpoint has also been observed on ARM64. Full mainnet catch-up,
-sustained load, and a combined reorg integration remain unvalidated. Production genesis synchronization,
+AssumeUtreexo checkpoint has completed on ARM64, with matching sidecar roots and
+a Public Pool job matching the compact node's template. Sustained load and a
+combined reorg integration remain unvalidated. Production genesis synchronization,
 TTL proof serving, and compact-wallet proof acquisition are outside this setup;
 the upstream committed-TTL synchronization path is unchanged.
 

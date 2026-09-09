@@ -296,7 +296,7 @@ func (sm *SyncManager) verifyBlockProof(block *btcutil.Block, data *wire.UData) 
 			return fmt.Errorf("unconfirmed leaf in block proof")
 		}
 	}
-	return sm.chain.VerifyUData(data, inputs, false)
+	return sm.chain.VerifyFullUData(data, inputs)
 }
 
 // verifyBlockCommitments authenticates the block bytes before blaming a proof
