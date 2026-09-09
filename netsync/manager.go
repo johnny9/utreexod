@@ -1328,7 +1328,6 @@ func (sm *SyncManager) handleHeadersMsg(hmsg *headersMsg) {
 
 	if shouldFetchBlocks {
 		sm.fetchHeaderBlocks(hmsg.peer)
-		return
 	}
 
 	// If we don't have the headers chain caught up to our peer, ask for more headers.
@@ -1583,7 +1582,7 @@ func (sm *SyncManager) handleInvMsg(imsg *invMsg) {
 	lastBlock := -1
 	invVects := imsg.inv.InvList
 	for i := len(invVects) - 1; i >= 0; i-- {
-		if invVects[i].Type == wire.InvTypeBlock {
+		if invVects[i].Type == wire.InvTypeBlock || invVects[i].Type == wire.InvTypeWitnessBlock {
 			lastBlock = i
 			break
 		}
@@ -1596,6 +1595,20 @@ func (sm *SyncManager) handleInvMsg(imsg *invMsg) {
 	// previously announced.
 	if lastBlock != -1 && (peer != sm.syncPeer || sm.current()) {
 		peer.UpdateLastAnnouncedBlock(&invVects[lastBlock].Hash)
+	}
+
+	// Keep the header target current while block/proof validation catches up.
+	// Ignoring block announcements throughout a long compact IBD freezes the
+	// target at the peer's handshake height and can enable mining too early.
+	if lastBlock != -1 && sm.chain.IsUtreexoViewActive() &&
+		servesBlocks(peer.Services()) && !sm.headersBuildMode &&
+		!sm.chain.IsValidHeader(&invVects[lastBlock].Hash) {
+		locator, err := sm.chain.LatestBlockLocatorByHeader()
+		if err != nil {
+			log.Warnf("Cannot request announced compact-sync headers: %v", err)
+		} else {
+			peer.PushGetHeadersMsg(locator, &invVects[lastBlock].Hash)
+		}
 	}
 
 	// Ignore invs from peers that aren't the sync if we are not current.
@@ -1653,7 +1666,8 @@ func (sm *SyncManager) handleInvMsg(imsg *invMsg) {
 		// Ignore txs when we're not current as we can't verify them
 		// and they'll just go in the orphan pool.
 		if iv.Type == wire.InvTypeWitnessTx ||
-			iv.Type == wire.InvTypeTx {
+			iv.Type == wire.InvTypeTx || iv.Type == wire.InvTypeUtreexoTx ||
+			iv.Type == wire.InvTypeWitnessUtreexoTx {
 
 			if !sm.current() {
 				continue

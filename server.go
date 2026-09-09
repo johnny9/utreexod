@@ -1687,9 +1687,10 @@ func (sp *serverPeer) OnNotFound(p *peer.Peer, msg *wire.MsgNotFound) {
 		case wire.InvTypeWitnessTx:
 			numTxns++
 		case wire.InvTypeWitnessUtreexoTx:
-			numTxns++
+			// Proofs are tied to a moving accumulator tip and providers may
+			// evict their bounded preparation cache after announcing a tx.
+			// A cache miss is not misbehavior; release the request below.
 		case wire.InvTypeUtreexoTx:
-			numTxns++
 		default:
 			peerLog.Debugf("Invalid inv type '%d' in notfound message from %s",
 				inv.Type, sp)
@@ -1706,7 +1707,7 @@ func (sp *serverPeer) OnNotFound(p *peer.Peer, msg *wire.MsgNotFound) {
 	}
 	if numTxns > 0 {
 		txStr := pickNoun(uint64(numTxns), "transaction", "transactions")
-		reason := fmt.Sprintf("%d %v not found", numBlocks, txStr)
+		reason := fmt.Sprintf("%d %v not found", numTxns, txStr)
 		if sp.addBanScore(0, 10*numTxns, reason) {
 			return
 		}

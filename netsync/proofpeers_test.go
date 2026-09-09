@@ -40,6 +40,24 @@ func TestProofServiceCapabilities(t *testing.T) {
 	}
 }
 
+func TestNotFoundReleasesOnlySourceTransactions(t *testing.T) {
+	sm, _ := proofTestManager(t, 1)
+	a := proofTestPeer(t, sm, "127.0.0.1:10001", wire.SFNodeUtreexo)
+	b := proofTestPeer(t, sm, "127.0.0.1:10002", wire.SFNodeUtreexo)
+	aHash, bHash := chainhash.Hash{1}, chainhash.Hash{2}
+	sm.peerStates[a].requestedTxns = map[chainhash.Hash]struct{}{aHash: {}}
+	sm.peerStates[b].requestedTxns = map[chainhash.Hash]struct{}{bHash: {}}
+	sm.requestedTxns = map[chainhash.Hash]struct{}{aHash: {}, bHash: {}}
+	msg := wire.NewMsgNotFound()
+	require.NoError(t, msg.AddInvVect(wire.NewInvVect(wire.InvTypeWitnessUtreexoTx, &aHash)))
+	require.NoError(t, msg.AddInvVect(wire.NewInvVect(wire.InvTypeUtreexoTx, &bHash)))
+	sm.handleNotFoundMsg(&notFoundMsg{peer: a, notFound: msg})
+	require.Empty(t, sm.peerStates[a].requestedTxns)
+	require.NotContains(t, sm.requestedTxns, aHash)
+	require.Contains(t, sm.requestedTxns, bHash, "unsolicited notfound cannot release another peer's request")
+	require.Contains(t, sm.peerStates[b].requestedTxns, bHash)
+}
+
 // proofTestManager provides real validated headers, without starting goroutines.
 func proofTestManager(t *testing.T, count int) (*SyncManager, []chainhash.Hash) {
 	t.Helper()
